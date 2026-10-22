@@ -1,0 +1,32 @@
+{
+  "name": "undercut",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Competitor intelligence for online stores: tracks rival prices, stock, promotions and launches, and writes a weekly brief.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "undercut": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "cli": "tsx src/cli.ts",
+    "db:migrate": "tsx src/cli.ts migrate"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "0.133.0",
+    "cheerio": "^1.2.0",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@types/pg": "^8.15.6",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}
