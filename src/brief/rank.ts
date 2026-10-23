@@ -11,6 +11,8 @@ export interface BriefItem {
   score: number;
   /** A concrete next step computed from the numbers. The brief writer may reword it but not change it. */
   suggestion?: string;
+  /** Estimated weekly sales at risk when a rival undercuts a product you sell. Needs your weekly units. */
+  revenueAtRiskCents?: number;
 }
 
 export interface RankInput {
@@ -21,6 +23,9 @@ export interface RankInput {
   /** Below this margin we never suggest matching a competitor's price. */
   minMarginPercent?: number;
   currency?: string;
+  /** See Config.priceSensitivity and Config.maxShareAtRisk. */
+  priceSensitivity?: number;
+  maxShareAtRisk?: number;
 }
 
 /**
@@ -62,10 +67,27 @@ export function rankEvents(input: RankInput): BriefItem[] {
         const wasCheaper = event.beforeCents! < yours.priceCents;
         const nowCheaper = event.afterCents! < yours.priceCents;
         if (nowCheaper && !wasCheaper) item.score += 30;
-        if (nowCheaper) {
+        if (nowCheaper && yours.unitsPerWeek !== undefined) {
+          const undercutPct = ((yours.priceCents - event.afterCents!) / yours.priceCents) * 100;
+          const share = Math.min(input.maxShareAtRisk ?? 0.6, (undercutPct * (input.priceSensitivity ?? 2)) / 100);
+          item.revenueAtRiskCents = Math.round(yours.unitsPerWeek * share * yours.priceCents);
+          // One extra point per $25 a week at stake, so big sellers rise to the top.
+          item.score += Math.min(40, item.revenueAtRiskCents / 2500);
+        }
+        if (nowCheaper && item.revenueAtRiskCents !== undefined && yours.costCents !== undefined) {
+          // Matching earns less on every unit; only worth it if that beats losing the sales at risk.
+          const units = yours.unitsPerWeek!;
+          const unitMargin = yours.priceCents - yours.costCents;
+          const marginAtRisk = (item.revenueAtRiskCents / yours.priceCents) * unitMargin;
+          const giveaway = units * (yours.priceCents - event.afterCents!);
+          if (giveaway >= marginAtRisk) {
+            item.suggestion = `Matching at ${money(event.afterCents!)} would give up ${money(Math.round(giveaway))} a week in margin to protect about ${money(Math.round(marginAtRisk))}. Hold your price and compete on value, bundles or shipping.`;
+          }
+        }
+        if (nowCheaper && !item.suggestion) {
           item.suggestion = matchSuggestion(event.afterCents!, yours, minMargin, money);
         } else if (event.kind === "price_increase") {
-          item.suggestion = `You are now ${money(-item.gapCents!)} cheaper on ${yours.title}. Say so in ads and on the product page.`;
+          item.suggestion = `You are now ${money(item.gapCents!)} cheaper on ${yours.title}. Say so in ads and on the product page.`;
         }
         break;
       }
@@ -152,5 +174,26 @@ export function collapse(events: ChangeEvent[]): ChangeEvent[] {
   const netPrices = [...priceByProduct.values()]
     .filter((e) => e.beforeCents !== e.afterCents)
     .map((e): ChangeEvent => ({ ...e, kind: e.afterCents! < e.beforeCents! ? "price_drop" : "price_increase" }));
-  return [...netPrices, ...stockByProduct.values(), ...promoByKey.values(), ...rest];
+  return [...netPrices, ...stockByProduct.values(), ...mergeSameBanner([...promoByKey.values()]), ...rest];
+}
+
+/**
+ * One banner often yields several promotions ("20% off with code BREW20" is a
+ * percent off and a code). Report it once, keeping the code as detail.
+ */
+function mergeSameBanner(events: ChangeEvent[]): ChangeEvent[] {
+  const byBanner = new Map<string, ChangeEvent>();
+  for (const e of events) {
+    const key = `${e.storeId}|${e.kind}|${e.title}`;
+    const first = byBanner.get(key);
+    if (!first) {
+      byBanner.set(key, e);
+      continue;
+    }
+    // Prefer the percent-off key, which carries the discount depth used for ranking.
+    const keep = e.promoKey?.startsWith("percent_off") ? e : first;
+    const details = [...new Set([first.detail, e.detail].filter(Boolean))];
+    byBanner.set(key, { ...keep, detail: details.length ? details.join("; ") : undefined });
+  }
+  return [...byBanner.values()];
 }

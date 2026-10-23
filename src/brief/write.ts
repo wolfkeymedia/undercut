@@ -8,6 +8,10 @@ export interface BriefContext {
   currency?: string;
   /** Items beyond this are summarized as a count, so the brief stays short. */
   maxItems?: number;
+  /** Headline numbers for the week (money at stake, price index, promo forecasts), already worded. */
+  headline?: string[];
+  /** Recommended price changes, already worded, most valuable first. */
+  priceActions?: string[];
 }
 
 const LABELS: Record<BriefItem["event"]["kind"], string> = {
@@ -39,6 +43,7 @@ export function describeItem(item: BriefItem, currency = "USD"): string {
               ? ` You are ${money(item.gapCents)} cheaper.`
               : " That matches your price.";
       }
+      if (item.revenueAtRiskCents) line += ` About ${money(item.revenueAtRiskCents)} a week of your sales is at risk.`;
       return line;
     }
     case "out_of_stock":
@@ -61,15 +66,21 @@ export function renderPlainBrief(items: BriefItem[], ctx: BriefContext): string 
   const max = ctx.maxItems ?? 8;
   const top = items.slice(0, max);
   const lines = [`# Weekly brief for ${ctx.merchantName}`, "", `Week of ${ctx.weekOf.toDateString()}`, ""];
+  if (ctx.headline?.length) {
+    lines.push("## The week in numbers", "", ...ctx.headline.map((h) => `- ${h}`), "");
+  }
+  lines.push("## What changed", "");
   if (top.length === 0) {
     lines.push("Nothing changed at your competitors this week.");
-    return lines.join("\n");
   }
   for (const item of top) {
     lines.push(`- **${LABELS[item.event.kind]}:** ${describeItem(item, ctx.currency)}`);
     if (item.suggestion) lines.push(`  - Suggested: ${item.suggestion}`);
   }
   if (items.length > max) lines.push("", `${items.length - max} smaller changes are in your dashboard.`);
+  if (ctx.priceActions?.length) {
+    lines.push("", "## Prices to change", "", ...ctx.priceActions.map((a) => `- ${a}`));
+  }
   return lines.join("\n");
 }
 
@@ -78,9 +89,10 @@ const SYSTEM_PROMPT = `You write a short weekly competitor brief for the owner o
 You receive a ranked list of facts about what competitors changed this week, each with an optional suggested action that was computed from the store's own prices, costs and margins.
 
 Write the brief in Markdown:
-- A one-sentence summary of the week first.
-- Then one bullet per fact, most important first, each starting with a bold label (Price, Promo, Stock, Launch or Removed).
-- Under a bullet, give the suggested action when one is provided.
+- A one-sentence summary of the week first. When headline numbers are given, lead with the money figure.
+- A "## The week in numbers" section listing the headline numbers, when there are any.
+- A "## What changed" section with one bullet per fact, most important first, each starting with a bold label (Price, Promo, Stock, Launch or Removed). Under a bullet, give the suggested action when one is provided.
+- A "## Prices to change" section listing the price actions, when there are any.
 - End with nothing else: no sign-off and no offer of further help.
 
 Use only the facts given. Keep every number, product name and competitor name exactly as written, and do not add actions, prices or percentages that are not in the facts. Write plainly for a busy shop owner who has two minutes.`;
@@ -95,7 +107,7 @@ export async function writeBrief(
   client: Anthropic | null = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null,
 ): Promise<{ markdown: string; writer: "claude" | "template" }> {
   const plain = renderPlainBrief(items, ctx);
-  if (!client || items.length === 0) return { markdown: plain, writer: "template" };
+  if (!client || (items.length === 0 && !ctx.headline?.length)) return { markdown: plain, writer: "template" };
 
   const max = ctx.maxItems ?? 8;
   const facts = items.slice(0, max).map((item, i) => ({
@@ -109,6 +121,8 @@ export async function writeBrief(
     week_of: ctx.weekOf.toDateString(),
     facts,
     smaller_changes_not_listed: Math.max(0, items.length - max),
+    headline_numbers: ctx.headline ?? [],
+    price_actions: ctx.priceActions ?? [],
   };
 
   try {

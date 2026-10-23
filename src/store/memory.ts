@@ -1,10 +1,10 @@
-import type { ChangeEvent, ProductMatch, ProductSnapshot, Store, StoreObservation } from "../types.js";
+import type { ChangeEvent, ProductEconomics, ProductMatch, ProductSnapshot, Store, StoreObservation } from "../types.js";
 import { matchKey, type Repository } from "./repository.js";
 
 export class MemoryRepository implements Repository {
   private stores = new Map<string, Store>();
   private observations = new Map<string, StoreObservation[]>();
-  private costs = new Map<string, Map<string, number>>();
+  private economics = new Map<string, Map<string, ProductEconomics>>();
   private events: ChangeEvent[] = [];
   private matches = new Map<string, ProductMatch>();
 
@@ -27,15 +27,21 @@ export class MemoryRepository implements Repository {
     const list = this.observations.get(storeId);
     return list?.length ? structuredClone(list[list.length - 1]!) : null;
   }
-  async setCosts(storeId: string, costs: Map<string, number>) {
-    const existing = this.costs.get(storeId) ?? new Map<string, number>();
-    for (const [id, cost] of costs) existing.set(id, cost);
-    this.costs.set(storeId, existing);
+  async setEconomics(storeId: string, economics: Map<string, ProductEconomics>) {
+    const existing = this.economics.get(storeId) ?? new Map<string, ProductEconomics>();
+    for (const [id, e] of economics) {
+      const was = existing.get(id) ?? {};
+      existing.set(id, { costCents: e.costCents ?? was.costCents, unitsPerWeek: e.unitsPerWeek ?? was.unitsPerWeek });
+    }
+    this.economics.set(storeId, existing);
   }
   async currentProducts(storeId: string): Promise<ProductSnapshot[]> {
     const latest = await this.latestObservation(storeId);
-    const costs = this.costs.get(storeId);
-    return (latest?.products ?? []).map((p) => ({ ...p, costCents: costs?.get(p.externalId) ?? p.costCents }));
+    const economics = this.economics.get(storeId);
+    return (latest?.products ?? []).map((p) => {
+      const e = economics?.get(p.externalId);
+      return { ...p, costCents: e?.costCents ?? p.costCents, unitsPerWeek: e?.unitsPerWeek ?? p.unitsPerWeek };
+    });
   }
 
   async saveEvents(events: ChangeEvent[]) {

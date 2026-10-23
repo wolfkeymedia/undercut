@@ -37,8 +37,9 @@ describe.skipIf(!url)("PostgresRepository", () => {
     await repo.saveObservation({ ...observation, observedAt: new Date("2026-10-21T08:00:00Z"), products: observation.products.slice(0, 1) });
     expect((await repo.latestObservation("mine"))?.products).toHaveLength(1);
 
-    await repo.setCosts("mine", new Map([["1", 2000]]));
-    expect((await repo.currentProducts("mine"))[0]?.costCents).toBe(2000);
+    await repo.setEconomics("mine", new Map([["1", { costCents: 2000 }]]));
+    await repo.setEconomics("mine", new Map([["1", { unitsPerWeek: 12.5 }]]));
+    expect((await repo.currentProducts("mine"))[0]).toEqual(expect.objectContaining({ costCents: 2000, unitsPerWeek: 12.5 }));
 
     const occurredAt = new Date();
     await repo.saveEvents([{ storeId: "them", kind: "price_drop", occurredAt, externalId: "9", title: "X", beforeCents: 100, afterCents: 90 }]);
