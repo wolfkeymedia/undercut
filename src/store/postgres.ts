@@ -2,7 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
-import type { ChangeEvent, ProductMatch, ProductSnapshot, Promotion, Store, StoreObservation } from "../types.js";
+import type { ChangeEvent, ProductEconomics, ProductMatch, ProductSnapshot, Promotion, Store, StoreObservation } from "../types.js";
 import type { Repository } from "./repository.js";
 
 const MIGRATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../db/migrations");
@@ -116,25 +116,32 @@ export class PostgresRepository implements Repository {
     };
   }
 
-  async setCosts(storeId: string, costs: Map<string, number>) {
-    if (costs.size === 0) return;
+  async setEconomics(storeId: string, economics: Map<string, ProductEconomics>) {
+    if (economics.size === 0) return;
+    const rows = [...economics.entries()];
     await this.pool.query(
-      `INSERT INTO product_costs (store_id, external_id, cost_cents)
-       SELECT $1, * FROM unnest($2::text[], $3::int[])
-       ON CONFLICT (store_id, external_id) DO UPDATE SET cost_cents = EXCLUDED.cost_cents, updated_at = now()`,
-      [storeId, [...costs.keys()], [...costs.values()]],
+      `INSERT INTO product_costs (store_id, external_id, cost_cents, units_per_week)
+       SELECT $1, * FROM unnest($2::text[], $3::int[], $4::real[])
+       ON CONFLICT (store_id, external_id) DO UPDATE SET
+         cost_cents = COALESCE(EXCLUDED.cost_cents, product_costs.cost_cents),
+         units_per_week = COALESCE(EXCLUDED.units_per_week, product_costs.units_per_week),
+         updated_at = now()`,
+      [storeId, rows.map(([id]) => id), rows.map(([, e]) => e.costCents ?? null), rows.map(([, e]) => e.unitsPerWeek ?? null)],
     );
   }
 
   async currentProducts(storeId: string) {
     const latest = await this.latestObservation(storeId);
     if (!latest) return [];
-    const { rows } = await this.pool.query<{ external_id: string; cost_cents: number }>(
-      "SELECT external_id, cost_cents FROM product_costs WHERE store_id = $1",
+    const { rows } = await this.pool.query<{ external_id: string; cost_cents: number | null; units_per_week: number | null }>(
+      "SELECT external_id, cost_cents, units_per_week FROM product_costs WHERE store_id = $1",
       [storeId],
     );
-    const costs = new Map(rows.map((r) => [r.external_id, r.cost_cents]));
-    return latest.products.map((p) => ({ ...p, costCents: costs.get(p.externalId) }));
+    const economics = new Map(rows.map((r) => [r.external_id, r]));
+    return latest.products.map((p) => {
+      const e = economics.get(p.externalId);
+      return { ...p, costCents: e?.cost_cents ?? undefined, unitsPerWeek: e?.units_per_week ?? undefined };
+    });
   }
 
   async saveEvents(events: ChangeEvent[]) {

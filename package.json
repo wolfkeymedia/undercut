@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "cli": "tsx src/cli.ts",
-    "db:migrate": "tsx src/cli.ts migrate"
+    "db:migrate": "tsx src/cli.ts migrate",
+    "demo": "tsx src/demo.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.133.0",

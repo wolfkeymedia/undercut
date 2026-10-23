@@ -1,0 +1,17 @@
+{
+  "pricing": {
+    "strategy": "beat",
+    "beatByPercent": 1,
+    "premiumPercent": 5,
+    "minMarginPercent": 25,
+    "maxChangePercent": 15,
+    "minChangePercent": 1,
+    "rounding": "99"
+  },
+  "priceSensitivity": 2,
+  "maxShareAtRisk": 0.6,
+  "alerts": {
+    "webhookUrl": "",
+    "minScore": 50
+  }
+}
