@@ -39,7 +39,8 @@ export interface Market {
 
 // First match wins, so kits and multi-packs are compared with each other rather than with single products.
 const CATEGORIES: [string, RegExp][] = [
-  ["Kits & sets", /\b(kit|set|duo|trio|trilogy|bundle|collection|gift box|vault)\b/i],
+  ["Minis", /\bminis?\b|\btravel size|\bsample/i],
+  ["Kits & sets", /\b(kits?|sets?|duo|trio|trilogy|bundle|collection|gift box|vault|edit|routine|look|crackers?|advent)\b/i],
   ["Palettes", /\bpalettes?\b/i],
   ["Foundation", /\bfoundation|\bskin tint/i],
   ["Concealer", /\bconcealer/i],
@@ -63,7 +64,10 @@ const CATEGORIES: [string, RegExp][] = [
 ];
 
 export function categorize(p: Pick<ProductSnapshot, "title" | "productType">): string {
-  for (const [name, re] of CATEGORIES) if (re.test(p.title)) return name;
+  // Minis and kits go by title; otherwise the store's own category is the better signal.
+  for (const [name, re] of CATEGORIES.slice(0, 2)) if (re.test(p.title)) return name;
+  if (p.productType) for (const [name, re] of CATEGORIES.slice(2)) if (re.test(p.productType)) return name;
+  for (const [name, re] of CATEGORIES.slice(2)) if (re.test(p.title)) return name;
   return p.productType?.trim() || "Other";
 }
 

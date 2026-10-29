@@ -320,7 +320,10 @@ function extractFromNextData($: cheerio.CheerioAPI, pageUrl: string): (Omit<Prod
   const currency = [purchase.currencyCode, purchase.currency, price.currencyCode].find((x): x is string => typeof x === "string");
   const id = [product.sku, product.id].find((x) => typeof x === "string" || typeof x === "number");
   // Shade or size, when the product object names it separately from the title.
-  const variant = ["shade", "shadeName", "colour", "color", "variantName", "variantTitle", "size"]
+  // A subtitle only names the variant on products that have swatches (e.g. "TAN - DEEP").
+  const variantKeys = ["shade", "shadeName", "colour", "color", "variantName", "variantTitle", "size"];
+  if (typeof product.swatchVariant === "string" && product.swatchVariant) variantKeys.push("subtitle");
+  const variant = variantKeys
     .map((k) => product[k])
     .map((v) => (v && typeof v === "object" ? ((v as JsonObject2).name ?? (v as JsonObject2).label ?? (v as JsonObject2).value) : v))
     .find((v): v is string => typeof v === "string" && v.trim().length > 0)
@@ -333,6 +336,8 @@ function extractFromNextData($: cheerio.CheerioAPI, pageUrl: string): (Omit<Prod
     priceCents,
     compareAtCents: listCents && listCents > priceCents ? listCents : undefined,
     available,
-    variant: variant ? tidyTitle(variant) : undefined,
+    variant: variant ? tidyTitle(variant.replace(/\s+-\s+/g, "-")) : undefined,
+    // e.g. "Makeup/Face/Powder"
+    productType: typeof product.category === "string" ? product.category.split("/").pop()?.trim() || undefined : undefined,
   };
 }

@@ -21,6 +21,9 @@ describe("market view", () => {
     expect(categorize({ title: "Pillow Talk Lip Cheat" })).toBe("Lip liner");
     expect(categorize({ title: "Airbrush Flawless Foundation" })).toBe("Foundation");
     expect(categorize({ title: "Gift Card", productType: "Gift Cards" })).toBe("Gift Cards");
+    expect(categorize({ title: "Airbrush Brightening Flawless Finish", productType: "Powder" })).toBe("Powder");
+    expect(categorize({ title: "Mini Lash Lift Mascara" })).toBe("Minis");
+    expect(categorize({ title: "The Everyday Glow Edit" })).toBe("Kits & sets");
   });
 
   it("summarises each brand, compares categories and lists the biggest offers", () => {

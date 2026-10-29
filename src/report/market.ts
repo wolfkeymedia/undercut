@@ -23,7 +23,8 @@ export function renderMarketReport(market: Market, options: { title?: string; si
   const nameOf = new Map(market.summaries.map((s) => [s.store.id, s.store.name]));
   const money = (storeId: string, c: number | undefined) => (c === undefined ? "—" : formatCents(c, currencyOf.get(storeId) ?? "EUR"));
   const generated = (options.generatedAt ?? new Date()).toLocaleString("en-IE", { dateStyle: "medium", timeStyle: "short" });
-  const since = options.since.toLocaleDateString("en-IE", { day: "numeric", month: "short" });
+  const days = Math.max(1, Math.round(((options.generatedAt ?? new Date()).getTime() - options.since.getTime()) / 86_400_000));
+  const window = `in the last ${days} ${days === 1 ? "day" : "days"}`;
   const title = options.title ?? "Competitor market";
 
   const totalProducts = market.summaries.reduce((s, x) => s + x.products, 0);
@@ -37,7 +38,7 @@ export function renderMarketReport(market: Market, options: { title?: string; si
   const tiles = [
     tile("Products tracked", String(totalProducts), `across ${market.summaries.length} brands`),
     tile("On offer now", String(totalOffers), "products showing a was-price"),
-    tile("Price and stock moves", String(moves), `since ${since}`),
+    tile("Price and stock moves", String(moves), window),
     tile("Live promotions", String(livePromos), "sitewide banners and codes"),
   ].join("");
 
@@ -154,7 +155,7 @@ table.cats td:first-child { min-width: 150px; }
   </div>
 
   <section>
-    <h2>What moved since ${esc(since)}</h2>
+    <h2>What moved ${esc(window)}</h2>
     ${moveList ? `<ul class="changes">${moveList}</ul>` : `<p class="empty">No price, stock or promotion changes yet. These build up from one check to the next.</p>`}
     ${catalogueNotes ? `<p class="sub" style="margin-top:12px">Catalogue changes: ${esc(catalogueNotes)}.</p>` : ""}
   </section>
