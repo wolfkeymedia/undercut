@@ -39,8 +39,8 @@ export interface Market {
 
 // First match wins, so kits and multi-packs are compared with each other rather than with single products.
 const CATEGORIES: [string, RegExp][] = [
-  ["Minis", /\bminis?\b|\btravel size|\bsample/i],
-  ["Kits & sets", /\b(kits?|sets?|duo|trio|trilogy|bundle|collection|gift box|vault|edit|routine|look|crackers?|advent)\b/i],
+  ["Kits & sets", /\b(kits?|sets?|trio|trilogy|bundle|collection|gift box|vault|edit|routine|look|crackers?|advent)\b|\bduo\b.*[+&]|[+&].*\bduo\b|\bduo\b.* and /i],
+  ["Minis", /\bminis?\b|\btravel\b|\bsample/i],
   ["Palettes", /\bpalettes?\b/i],
   ["Foundation", /\bfoundation|\bskin tint/i],
   ["Concealer", /\bconcealer/i],
@@ -48,7 +48,7 @@ const CATEGORIES: [string, RegExp][] = [
   ["Setting spray", /\bsetting spray|\bsetting mist|\bfix(ing)? spray/i],
   ["Powder", /\bpowder/i],
   ["Bronzer", /\bbronz/i],
-  ["Contour", /\bcontour|\bsculpt/i],
+  ["Contour", /\bcontour/i],
   ["Blush", /\bblush/i],
   ["Highlighter", /\bhighlight|\bglow\b|\billuminat/i],
   ["Lip liner", /\blip ?liner|\blip cheat/i],
@@ -62,6 +62,13 @@ const CATEGORIES: [string, RegExp][] = [
   ["Skincare", /\bcream|\bserum|\bmoisturi|\bcleans|\btoner|\bmask|\bbalm|\bspf\b|\beye care/i],
   ["Fragrance", /\bfragrance|\bperfume|\beau de\b/i],
 ];
+
+// Gift cards, courses and merchandise are not products anyone prices against.
+const NOT_PRODUCTS = /\b(e-?gift|gift ?cards?|vouchers?|courses?|academy|masterclass|workshops?|notebook|sweatshirt|hoodie|t-shirt|tee|merch(andise)?|tote)\b/i;
+
+export function isComparable(p: Pick<ProductSnapshot, "title" | "productType">): boolean {
+  return !NOT_PRODUCTS.test(p.title) && !NOT_PRODUCTS.test(p.productType ?? "");
+}
 
 export function categorize(p: Pick<ProductSnapshot, "title" | "productType">): string {
   // Minis and kits go by title; otherwise the store's own category is the better signal.
@@ -77,8 +84,9 @@ export function buildMarket(input: {
   promotions: Map<string, Promotion[]>;
   events: ChangeEvent[];
 }): Market {
+  const comparable = new Map([...input.products].map(([id, list]) => [id, list.filter(isComparable)]));
   const summaries = input.stores.map((store): StoreSummary => {
-    const products = input.products.get(store.id) ?? [];
+    const products = comparable.get(store.id) ?? [];
     const prices = products.map((p) => p.priceCents);
     const offers = products.filter((p) => p.compareAtCents && p.compareAtCents > p.priceCents);
     return {
@@ -97,7 +105,7 @@ export function buildMarket(input: {
 
   const grouped = new Map<string, Map<string, number[]>>();
   for (const store of input.stores) {
-    for (const p of input.products.get(store.id) ?? []) {
+    for (const p of comparable.get(store.id) ?? []) {
       const cat = categorize(p);
       const byStore = grouped.get(cat) ?? new Map<string, number[]>();
       byStore.set(store.id, [...(byStore.get(store.id) ?? []), p.priceCents]);
@@ -118,7 +126,7 @@ export function buildMarket(input: {
 
   const offers = input.stores
     .flatMap((store) =>
-      (input.products.get(store.id) ?? [])
+      (comparable.get(store.id) ?? [])
         .filter((p) => p.compareAtCents && p.compareAtCents > p.priceCents)
         .map((product) => ({ store, product, percentOff: percentOff(product) })),
     )

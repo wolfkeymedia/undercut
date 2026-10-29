@@ -141,6 +141,13 @@ describe("structured product data", () => {
       "Airbrush Brightening Flawless Finish – Tan-Deep",
     );
     expect(extractStructuredProduct(html, "https://ct.example/ie/product/airbrush-brightening-flawless-finish-tan-deep")?.productType).toBe("Powder");
+    const refill = { props: { pageProps: { product: { slug: "flawless-foundation-refill", title: "FLAWLESS FOUNDATION REFILL",
+      subtitle: "FAIR - MEDIUM REFILL", swatchVariant: "SHADE", price: { purchasePrice: { value: 46 } } } } } };
+    expect(
+      extractStructuredProduct(`<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(refill)}</script>`, "https://ct.example/ie/product/flawless-foundation-refill")?.title,
+    ).toBe("Flawless Foundation Refill – Fair-Medium");
+    const kit = { props: { pageProps: { product: { slug: "glow-kit", title: "GLOW KIT", subtitle: "MAGICAL SAVINGS", swatchVariant: "NONE", price: { purchasePrice: { value: 80 } } } } } };
+    expect(extractStructuredProduct(`<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(kit)}</script>`, "https://ct.example/ie/product/glow-kit")?.title).toBe("Glow Kit");
     expect(tidyTitle("PILLOW TALK LIP KIT WITH SPF 15")).toBe("Pillow Talk Lip Kit with SPF 15");
     expect(tidyTitle("Magic Cream")).toBe("Magic Cream");
   });

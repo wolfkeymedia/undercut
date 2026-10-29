@@ -30,8 +30,8 @@ export async function collectStore(fetcher: Fetcher, store: Store, options: Coll
 
   if (products === null) {
     source = "structured_data";
-    const discovered = await discoverProductUrls(fetcher, base, options.maxProductPages ?? 200);
-    const urls = [...new Set([...(options.productUrls ?? []), ...discovered])].slice(0, options.maxProductPages ?? 200);
+    const discovered = await discoverProductUrls(fetcher, base, options.maxProductPages ?? 500);
+    const urls = [...new Set([...(options.productUrls ?? []), ...discovered])].slice(0, options.maxProductPages ?? 500);
     products = await collectProductPages(fetcher, urls, renderer);
   } else if (options.productUrls?.length) {
     const known = new Set(products.map((p) => p.url));

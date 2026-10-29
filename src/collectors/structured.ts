@@ -198,9 +198,12 @@ export function extractFromMarkup($: cheerio.CheerioAPI, pageUrl: string): Produ
     // The page's own title often carries the shade or size the data leaves out.
     const base = tidyTitle(fromNext.title || title);
     const named = title.toLowerCase().startsWith(base.toLowerCase()) && title.length > base.length ? tidyTitle(title) : base;
-    const variant = fromNext.variant && !named.toLowerCase().includes(fromNext.variant.toLowerCase()) ? ` – ${fromNext.variant}` : "";
+    // Drop words the title already has, e.g. "Refill" in "Foundation Refill – Fair-Medium Refill".
+    const titleWords = new Set(named.toLowerCase().split(/\s+/));
+    const shade = fromNext.variant?.split(/\s+/).filter((w) => !titleWords.has(w.toLowerCase())).join(" ");
+    const variant = shade && !named.toLowerCase().includes(shade.toLowerCase()) ? ` – ${shade}` : "";
     const { variant: _v, ...rest } = fromNext;
-    return { ...rest, title: named + variant, url, imageUrl: fromNext.imageUrl ?? meta("og:image") };
+    return { ...rest, title: (named + variant).replace(/\s+/g, " ").trim(), url, imageUrl: fromNext.imageUrl ?? meta("og:image") };
   }
 
   let priceCents = toCents(meta("product:price:amount") ?? meta("og:price:amount") ?? itemprop("price"));
@@ -322,7 +325,7 @@ function extractFromNextData($: cheerio.CheerioAPI, pageUrl: string): (Omit<Prod
   // Shade or size, when the product object names it separately from the title.
   // A subtitle only names the variant on products that have swatches (e.g. "TAN - DEEP").
   const variantKeys = ["shade", "shadeName", "colour", "color", "variantName", "variantTitle", "size"];
-  if (typeof product.swatchVariant === "string" && product.swatchVariant) variantKeys.push("subtitle");
+  if (typeof product.swatchVariant === "string" && /shade|colou?r|size/i.test(product.swatchVariant)) variantKeys.push("subtitle");
   const variant = variantKeys
     .map((k) => product[k])
     .map((v) => (v && typeof v === "object" ? ((v as JsonObject2).name ?? (v as JsonObject2).label ?? (v as JsonObject2).value) : v))

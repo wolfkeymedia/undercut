@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMarket, categorize } from "../src/insights/market.js";
+import { buildMarket, categorize, isComparable } from "../src/insights/market.js";
 import { renderMarketReport } from "../src/report/market.js";
 import type { ProductSnapshot, Store } from "../src/types.js";
 
@@ -24,6 +24,12 @@ describe("market view", () => {
     expect(categorize({ title: "Airbrush Brightening Flawless Finish", productType: "Powder" })).toBe("Powder");
     expect(categorize({ title: "Mini Lash Lift Mascara" })).toBe("Minis");
     expect(categorize({ title: "The Everyday Glow Edit" })).toBe("Kits & sets");
+    expect(categorize({ title: "Angle Duo Brush" })).toBe("Brushes & tools");
+    expect(categorize({ title: "Blur + Lock Duo" })).toBe("Kits & sets");
+    expect(categorize({ title: "Magic Cream – Travel" })).toBe("Minis");
+    expect(categorize({ title: "Sculpted Academy Masterclass" })).not.toBe("Contour");
+    expect(isComparable({ title: "Sculpted Academy Masterclass" })).toBe(false);
+    expect(isComparable({ title: "eGift Card" })).toBe(false);
   });
 
   it("summarises each brand, compares categories and lists the biggest offers", () => {
