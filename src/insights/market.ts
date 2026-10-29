@@ -54,7 +54,8 @@ const CATEGORIES: [string, RegExp][] = [
   ["Lip liner", /\blip ?liner|\blip cheat/i],
   ["Lip gloss", /\blip ?gloss|\blip oil|\blip lustre/i],
   ["Lipstick", /\blipstick|\blip colou?r|\blip\b/i],
-  ["Mascara", /\bmascara|\blash/i],
+  ["Mascara", /\bmascara/i],
+  ["Lashes", /\blash/i],
   ["Eyeliner", /\beye ?liner|\bkohl/i],
   ["Eyeshadow", /\beye ?shadow|\beye colou?r/i],
   ["Brows", /\bbrow/i],
@@ -64,7 +65,7 @@ const CATEGORIES: [string, RegExp][] = [
 ];
 
 // Gift cards, courses and merchandise are not products anyone prices against.
-const NOT_PRODUCTS = /\b(e-?gift|gift ?cards?|vouchers?|courses?|academy|masterclass|workshops?|notebook|sweatshirt|hoodie|t-shirt|tee|merch(andise)?|tote)\b/i;
+const NOT_PRODUCTS = /\b(e-?gift|gift ?cards?|vouchers?|courses?|academy|masterclass|workshops?|application|appointment|notebook|sweatshirt|hoodie|t-shirt|tee|merch(andise)?|tote)\b/i;
 
 export function isComparable(p: Pick<ProductSnapshot, "title" | "productType">): boolean {
   return !NOT_PRODUCTS.test(p.title) && !NOT_PRODUCTS.test(p.productType ?? "");
