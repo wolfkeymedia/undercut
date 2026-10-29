@@ -18,7 +18,7 @@ const HELP = `Usage: undercut <command> [options]
 Commands:
   migrate                          Create or update the database tables
   add-store <url> --merchant       Add your own store
-  add-store <url> [--name NAME]    Add a competitor
+  add-store <url> [NAME]           Add a competitor (or --name NAME)
   stores                           List stores
   import-products <file.csv>       Load unit costs and weekly unit sales for your products
                                    (columns: id, url or title, plus cost and/or units_per_week)
@@ -83,7 +83,9 @@ async function main() {
             throw new Error(`Your store is already set to ${existing[0]!.url}. This version supports one merchant store.`);
           }
         }
-        const store: Store = { id: storeIdFromUrl(origin), name: values.name ?? new URL(origin).host.replace(/^www\./, ""), url: origin, kind };
+        // A name can also follow the URL, for shells (PowerShell's npm shim) that swallow --name.
+        const name = values.name ?? (args.slice(1).join(" ") || new URL(origin).host.replace(/^www\./, ""));
+        const store: Store = { id: storeIdFromUrl(origin), name, url: origin, kind };
         await repo.upsertStore(store);
         console.log(`Added ${kind === "merchant" ? "your store" : "competitor"} ${store.name} (${store.id})`);
         break;

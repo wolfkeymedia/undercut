@@ -53,7 +53,20 @@ export async function collectShopifyFeed(
     }
     if (feed.products.length < PAGE_SIZE) break;
   }
-  return products;
+  // The feed has no currency; the storefront cart reports the store's (or region's) currency.
+  const currency = await storeCurrency(fetcher, origin);
+  return currency ? products.map((p) => ({ ...p, currency })) : products;
+}
+
+async function storeCurrency(fetcher: Fetcher, origin: string): Promise<string | undefined> {
+  try {
+    const res = await fetcher(`${origin}/cart.js`);
+    if (res.status !== 200) return undefined;
+    const currency = (JSON.parse(res.body) as { currency?: unknown }).currency;
+    return typeof currency === "string" && /^[A-Z]{3}$/.test(currency) ? currency : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function parseFeed(body: string): ShopifyFeed | null {
@@ -71,7 +84,8 @@ function parseFeed(body: string): ShopifyFeed | null {
 export function toSnapshot(origin: string, p: ShopifyProduct): ProductSnapshot | null {
   const variants = p.variants
     .map((v) => ({ price: toCents(v.price), compareAt: toCents(v.compare_at_price), available: v.available ?? true }))
-    .filter((v): v is { price: number; compareAt: number | undefined; available: boolean } => v.price !== undefined);
+    // Zero-price variants are free gifts, samples or packaging add-ons, not products anyone competes on.
+    .filter((v): v is { price: number; compareAt: number | undefined; available: boolean } => v.price !== undefined && v.price > 0);
   if (variants.length === 0) return null;
 
   const available = variants.filter((v) => v.available);

@@ -24,6 +24,8 @@ const SALE_WORDS =
 export function detectPromotions(html: string): Promotion[] {
   const $ = cheerio.load(html);
   $("script, style, noscript, svg").remove();
+  // Menus list categories like "10% Off Gift Sets" that are links, not running offers.
+  $('nav, [role="navigation"], [class*="menu" i], [class*="navigation" i], [class*="megamenu" i]').remove();
 
   const texts = new Set<string>();
   $(PROMO_SELECTORS).each((_, el) => {

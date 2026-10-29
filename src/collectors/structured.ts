@@ -172,9 +172,14 @@ async function sitemapsFromRobots(fetcher: Fetcher, origin: string): Promise<str
 const CURRENCY_SYMBOLS: Record<string, string> = { "€": "EUR", "£": "GBP", $: "USD" };
 const PRICE_TEXT = /([€£$])\s?(\d{1,5}(?:[.,]\d{3})*(?:[.,]\d{2})?)|(\d{1,5}(?:[.,]\d{2})?)\s?([€£])/;
 
+/** Containers that hold other products' prices: upsells, bundles, carousels, menus. */
+const OTHER_PRODUCTS =
+  '[class*="upsell" i], [class*="bundle" i], [class*="carousel" i], [class*="recommend" i], [class*="related" i], [class*="cross-sell" i], [class*="crosssell" i], [class*="also-like" i], [class*="you-may" i], nav, footer';
+
 /**
- * Fallback for pages without JSON-LD: Open Graph product tags, schema.org
- * microdata, then the first visible price in a price-like element. Works on
+ * Fallback for pages without JSON-LD: the page's Next.js data, Open Graph
+ * product tags, schema.org microdata, then the first visible price that
+ * belongs to the main product (not an upsell or carousel). Works on
  * browser-rendered pages too, where prices only appear after scripts run.
  */
 export function extractFromMarkup($: cheerio.CheerioAPI, pageUrl: string): ProductSnapshot | null {
@@ -183,39 +188,46 @@ export function extractFromMarkup($: cheerio.CheerioAPI, pageUrl: string): Produ
     const el = $(`[itemprop="${name}"]`).first();
     return (el.attr("content") ?? el.text()).trim() || undefined;
   };
+  const canonical = $('link[rel="canonical"]').attr("href") ?? meta("og:url");
+  const url = canonical ? new URL(canonical, pageUrl).toString() : pageUrl;
+  const rawTitle = (meta("og:title") ?? $("h1").first().text() ?? $("title").text()).replace(/\s+/g, " ").trim();
+  const title = stripSiteName(rawTitle, meta("og:site_name"));
+
+  const fromNext = extractFromNextData($, url);
+  if (fromNext) return { ...fromNext, title: fromNext.title || title, url, imageUrl: fromNext.imageUrl ?? meta("og:image") };
 
   let priceCents = toCents(meta("product:price:amount") ?? meta("og:price:amount") ?? itemprop("price"));
   let currency = meta("product:price:currency") ?? meta("og:price:currency") ?? itemprop("priceCurrency");
   let compareAtCents: number | undefined;
 
   if (priceCents === undefined) {
-    // Visible price: the first price-like element whose text holds an actual amount (not a {{template}}).
-    const candidates = $('[data-price], [class*="price" i], [id*="price" i]')
+    // Visible price: the first price element of the main product whose text holds an actual amount (not a {{template}}).
+    const candidates = $('[data-price], [data-price-amount], [class*="price" i], [id*="price" i]')
       .filter((_, el) => !/was|compare|original|strike|old|rrp/i.test(`${$(el).attr("class") ?? ""} ${$(el).attr("id") ?? ""}`))
+      .filter((_, el) => $(el).closest(OTHER_PRODUCTS).length === 0)
       .toArray();
     for (const el of candidates) {
-      const text = $(el).clone().children("s, del").remove().end().text().replace(/\s+/g, " ");
-      if (text.includes("{{")) continue;
+      const $el = $(el);
+      const now = $el.find("ins").first();
+      const amount = (now.length ? now : $el).attr("data-price-amount") ?? $el.attr("data-price-amount");
+      const text = (now.length ? now : $el.clone().children("s, del").remove().end()).text().replace(/\s+/g, " ");
+      if (!amount && text.includes("{{")) continue;
       const m = text.match(PRICE_TEXT);
-      if (!m) continue;
-      priceCents = toCents(m[2] ?? m[3]);
-      currency ??= CURRENCY_SYMBOLS[m[1] ?? m[4] ?? ""];
+      const cents = amount ? toCents(amount) : m ? toCents(m[2] ?? m[3]) : undefined;
+      if (!cents) continue;
+      priceCents = cents;
+      currency ??= $el.attr("data-price-currency") ?? CURRENCY_SYMBOLS[m?.[1] ?? m?.[4] ?? ""];
+      // A was-price only counts when it sits with this price, not elsewhere on the page.
+      const wasEl = $el.find('del, s, [class*="rrp" i], [class*="was" i], [class*="compare" i]').first();
+      const wasText = wasEl.attr("data-price-amount") ?? wasEl.text().match(PRICE_TEXT)?.slice(2, 4).find(Boolean);
+      const wasCents = wasText ? toCents(wasText) : undefined;
+      if (wasCents && wasCents > priceCents) compareAtCents = wasCents;
       break;
     }
-    const was = $('s, del, [class*="was" i], [class*="compare" i], [class*="original" i], [class*="strike" i]')
-      .toArray()
-      .map((el) => $(el).text().match(PRICE_TEXT))
-      .find(Boolean);
-    const wasCents = was ? toCents(was[2] ?? was[3]) : undefined;
-    if (wasCents && priceCents && wasCents > priceCents) compareAtCents = wasCents;
   }
   if (priceCents === undefined || priceCents <= 0) return null;
-
-  const title = (meta("og:title") ?? $("h1").first().text() ?? $("title").text()).replace(/\s+/g, " ").trim();
   if (!title) return null;
   const availability = meta("product:availability") ?? meta("og:availability") ?? itemprop("availability");
-  const canonical = $('link[rel="canonical"]').attr("href") ?? meta("og:url");
-  const url = canonical ? new URL(canonical, pageUrl).toString() : pageUrl;
 
   return {
     externalId: itemprop("sku") ?? meta("product:retailer_item_id") ?? url,
@@ -226,5 +238,70 @@ export function extractFromMarkup($: cheerio.CheerioAPI, pageUrl: string): Produ
     priceCents,
     compareAtCents,
     available: availability ? !/out.?of.?stock|oos|sold.?out|discontinued/i.test(availability) : true,
+  };
+}
+
+/** "Airbrush Flawless Finish | Charlotte Tilbury" -> "Airbrush Flawless Finish". */
+export function stripSiteName(title: string, siteName?: string): string {
+  let t = title.replace(/\s+\|\s+[^|]+$/, "");
+  if (siteName) t = t.replace(new RegExp(`\\s+[-–—]\\s+${siteName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"), "");
+  return t.trim() || title;
+}
+
+type JsonObject2 = Record<string, unknown>;
+
+/**
+ * Next.js storefronts embed their product data as JSON in __NEXT_DATA__.
+ * Finds the product whose slug or URL matches the page, so upsell and carousel
+ * products on the same page are never mistaken for it.
+ */
+function extractFromNextData($: cheerio.CheerioAPI, pageUrl: string): Omit<ProductSnapshot, "url"> | null {
+  const raw = $("script#__NEXT_DATA__").text();
+  if (!raw) return null;
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const slug = new URL(pageUrl).pathname.replace(/\/+$/, "").split("/").pop()?.toLowerCase();
+  if (!slug) return null;
+
+  const candidates: JsonObject2[] = [];
+  const walk = (v: unknown, depth: number) => {
+    if (depth > 30 || !v || typeof v !== "object") return;
+    if (Array.isArray(v)) return v.forEach((x) => walk(x, depth + 1));
+    const o = v as JsonObject2;
+    const price = o.price as JsonObject2 | undefined;
+    if (price && typeof price === "object" && (price.purchasePrice as JsonObject2 | undefined)?.value !== undefined) candidates.push(o);
+    for (const x of Object.values(o)) walk(x, depth + 1);
+  };
+  walk(data, 0);
+
+  const matchesPage = (o: JsonObject2) =>
+    ["slug", "href", "url", "path", "handle", "productUrl"].some((k) => typeof o[k] === "string" && (o[k] as string).toLowerCase().replace(/\/+$/, "").endsWith(slug));
+  const product = candidates.find(matchesPage) ?? (candidates.length === 1 ? candidates[0] : undefined);
+  if (!product) return null;
+
+  const price = product.price as JsonObject2;
+  const purchase = price.purchasePrice as JsonObject2;
+  const listing = price.listingPrice as JsonObject2 | undefined;
+  const priceCents = toCents(purchase.value);
+  if (!priceCents) return null;
+  const listCents = toCents(listing?.value);
+  const stock = product.availability ?? product.inStock ?? product.isAvailable ?? product.available ?? product.stockStatus;
+  const available =
+    typeof stock === "boolean" ? stock : typeof stock === "string" ? !/out.?of.?stock|oos|sold.?out|unavailable/i.test(stock) : true;
+  const name = [product.title, product.name].find((x): x is string => typeof x === "string") ?? "";
+  const currency = [purchase.currencyCode, purchase.currency, price.currencyCode].find((x): x is string => typeof x === "string");
+  const id = [product.sku, product.id].find((x) => typeof x === "string" || typeof x === "number");
+
+  return {
+    externalId: id !== undefined ? String(id) : pageUrl,
+    title: name,
+    currency,
+    priceCents,
+    compareAtCents: listCents && listCents > priceCents ? listCents : undefined,
+    available,
   };
 }
