@@ -2,6 +2,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { politeFetcher } from "./collectors/http.js";
+import { browserRenderer } from "./collectors/render.js";
 import { sendAlerts } from "./alerts.js";
 import { loadConfig } from "./config.js";
 import { parseEconomicsCsv } from "./costs.js";
@@ -72,7 +73,9 @@ async function main() {
       case "add-store": {
         const url = args[0];
         if (!url) throw new Error("Give the store's URL, e.g. undercut add-store https://example.com");
-        const origin = new URL(url.startsWith("http") ? url : `https://${url}`).origin;
+        // Keep a regional path such as /ie: it decides which prices, currency and sitemap we read.
+        const parsed = new URL(url.startsWith("http") ? url : `https://${url}`);
+        const origin = `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
         const kind: Store["kind"] = values.merchant ? "merchant" : "competitor";
         if (kind === "merchant") {
           const existing = await repo.listStores("merchant");
@@ -108,9 +111,10 @@ async function main() {
       case "run": {
         const runStartedAt = new Date();
         const fetcher = politeFetcher();
+        const renderer = config.collect.renderJavaScript === "auto" ? await browserRenderer() : null;
         for (const store of await repo.listStores()) {
           try {
-            const { observation, events } = await checkStore(repo, fetcher, store);
+            const { observation, events } = await checkStore(repo, fetcher, store, { renderer });
             console.log(
               `${store.name}: ${observation.products.length} products via ${observation.source}, ` +
                 `${observation.promotions.length} promotions, ${events.length} changes`,
@@ -119,6 +123,7 @@ async function main() {
             console.error(`${store.name}: ${(err as Error).message}`);
           }
         }
+        await renderer?.close();
         const suggested = await refreshMatches(repo);
         console.log(`Product matches suggested or refreshed: ${suggested}`);
         if (config.alerts.webhookUrl && (await repo.listStores("merchant")).length > 0) {
@@ -165,7 +170,8 @@ async function main() {
       case "pair": {
         const [yourUrl, theirUrl] = args;
         if (!yourUrl || !theirUrl) throw new Error("Give your product's URL, then the competitor product's URL.");
-        const { yours, theirs, competitor } = await pairProducts(repo, politeFetcher(), yourUrl, theirUrl);
+        const renderer = config.collect.renderJavaScript === "auto" ? await browserRenderer() : null;
+        const { yours, theirs, competitor } = await pairProducts(repo, politeFetcher(), yourUrl, theirUrl, renderer).finally(() => renderer?.close());
         const money = (c: number) => formatCents(c, yours.currency);
         console.log(`Paired ${yours.title} (${money(yours.priceCents)}) with ${competitor.name}'s ${theirs.title} (${money(theirs.priceCents)}).`);
         break;

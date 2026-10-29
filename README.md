@@ -25,7 +25,7 @@ your store ────────► collectors ──► your catalog + unit 
                                          └──► product matcher ──► ranked brief ──► Claude (or template)
 ```
 
-- **Collectors** (`src/collectors`) read a store's public Shopify product feed when it has one (one request per 250 products). Other stores are read page by page from their sitemap, using the schema.org product data most stores publish for Google Shopping. The homepage is scanned for promotions: percent or amount off, discount codes, free-shipping thresholds and named sales. Requests identify themselves, are spaced out per host and respect `robots.txt`.
+- **Collectors** (`src/collectors`) read a store's public Shopify product feed when it has one (one request per 250 products). Other stores are read page by page from their sitemap, using the schema.org product data most stores publish for Google Shopping. The homepage is scanned for promotions: percent or amount off, discount codes, free-shipping thresholds and named sales. Requests identify themselves, are spaced out per host and respect `robots.txt`. Stores that fill in prices with JavaScript are loaded in a headless browser (Playwright's Chromium) when it is installed. A store can be a regional part of a site, such as `https://brand.com/ie`, which keeps prices, currency and sitemaps to that region.
 - **Change detection** (`src/detect`) compares each check with the previous one and records price drops and rises, stock-outs, restocks, new and removed products, and promotions starting or ending. The first check of a store is a baseline.
 - **Matching** (`src/match`) suggests which competitor product corresponds to each of yours, using title similarity with sizes and quantities taken into account. Suggestions only count once you confirm them.
 - **Insights** (`src/insights`) build the scorecard (where each product stands, a price index per competitor, sales at risk), turn your pricing rules into recommended prices, and find each competitor's promotion rhythm.
@@ -45,6 +45,7 @@ Requires Node 22+ and Postgres 14+.
 
 ```sh
 npm install
+npx playwright install chromium   # optional: for stores that fill in prices with JavaScript
 cp .env.example .env          # then fill in DATABASE_URL, and ANTHROPIC_API_KEY if you have one
 export $(grep -v '^#' .env | xargs)
 npm run db:migrate
