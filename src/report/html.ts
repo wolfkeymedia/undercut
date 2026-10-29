@@ -208,17 +208,22 @@ function rulesSummary(config: Config): string {
 
 /** Shared by every Undercut report page. */
 export const REPORT_CSS = `:root {
-  --bg: #f5f6f8; --surface: #fff; --fg: #18212b; --muted: #5d6a77; --line: #dde2e8;
-  --accent: #0b5d7a; --good: #1d7a46; --good-bg: #e4f3ea; --bad: #b23a2f; --bad-bg: #fbe8e5;
-  --neutral: #6b5a14; --neutral-bg: #f6efd2; --muted-bg: #eceff3;
+  --bg: #f5f7fa; --surface: #fff; --fg: #1f2a3c; --muted: #5d6879; --line: #e2e7ee;
+  --accent: #3d5a80; --good: #2e7458; --good-bg: #e2f3ec; --bad: #a8455a; --bad-bg: #fbe8ee;
+  --neutral: #7d6520; --neutral-bg: #faf1d9; --muted-bg: #edf0f4;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f151b; --surface: #17212b; --fg: #e6ecf1; --muted: #9aa8b5; --line: #2b3844;
-    --accent: #5fb8d6; --good: #5cc98a; --good-bg: #173326; --bad: #f08376; --bad-bg: #3a1d1a;
-    --neutral: #e3c766; --neutral-bg: #352d12; --muted-bg: #222d38; color-scheme: dark;
+  :root:not([data-theme="light"]) {
+    --bg: #131922; --surface: #1b2330; --fg: #e8edf4; --muted: #a3afc0; --line: #2c3746;
+    --accent: #9db8db; --good: #8fd1b4; --good-bg: #1d3329; --bad: #eba3b4; --bad-bg: #3a2229;
+    --neutral: #e5cd85; --neutral-bg: #352e18; --muted-bg: #263142; color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #131922; --surface: #1b2330; --fg: #e8edf4; --muted: #a3afc0; --line: #2c3746;
+  --accent: #9db8db; --good: #8fd1b4; --good-bg: #1d3329; --bad: #eba3b4; --bad-bg: #3a2229;
+  --neutral: #e5cd85; --neutral-bg: #352e18; --muted-bg: #263142; color-scheme: dark;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
