@@ -204,7 +204,8 @@ async function main() {
 
       case "market": {
         const out = values.out ?? args[0] ?? "undercut-market.html";
-        await writeFile(out, renderMarketReport(await buildMarketView(repo, since), { since }));
+        const [merchant] = await repo.listStores("merchant");
+        await writeFile(out, renderMarketReport(await buildMarketView(repo, since), { since, title: merchant ? `${merchant.name} against the market` : undefined }));
         console.log(`Wrote the market report to ${out}. Open it in a browser, or attach it to an email.`);
         break;
       }
