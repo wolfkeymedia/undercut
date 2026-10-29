@@ -69,8 +69,13 @@ npm run cli -- import-products products.csv  # unit costs and weekly sales, so e
 npm run cli -- scorecard               # where each product stands, in the terminal
 npm run cli -- prices --out prices.csv # recommended price changes
 npm run cli -- report --out report.html
+npm run cli -- market --out market.html  # competitors only: brands, prices by category, offers, promotions
 npm run cli -- brief --days 7 --out brief.md
 ```
+
+Until your own store is added, `report` writes the market report instead, so there is something to look at after the first run.
+
+On Windows PowerShell, npm can swallow flags such as `--name` and `--out`. Pass them positionally (`npm run cli add-store https://brand.com "Brand Name"`, `npm run cli market market.html`) or run the CLI directly: `npx tsx src/cli.ts market --out market.html`.
 
 Run `run` on a schedule (cron, or your host's scheduler) once or several times a day. Changes accumulate between runs and `brief` reports the last N days.
 

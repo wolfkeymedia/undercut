@@ -8,8 +8,9 @@ import { loadConfig } from "./config.js";
 import { parseEconomicsCsv } from "./costs.js";
 import { recommendationsCsv } from "./insights/pricing.js";
 import { formatCents } from "./money.js";
-import { buildBrief, buildInsights, checkStore, pairProducts, refreshMatches, storeIdFromUrl } from "./pipeline.js";
+import { buildBrief, buildInsights, buildMarketView, checkStore, pairProducts, refreshMatches, storeIdFromUrl } from "./pipeline.js";
 import { renderReport } from "./report/html.js";
+import { renderMarketReport } from "./report/market.js";
 import { migrate, PostgresRepository } from "./store/postgres.js";
 import type { ProductMatch, Store } from "./types.js";
 
@@ -30,6 +31,8 @@ Commands:
   pair <your-url> <their-url>      Pair one of your products with an equivalent competitor product by hand
   brief [--days 7] [--out FILE]    Write the weekly brief
   report [--days 7] [--out FILE]   Write the weekly manager report as one HTML page
+                                   (the market report until your own store is added)
+  market [--days 7] [--out FILE]   Write the competitor market report: brands, prices by category, offers
   scorecard                        Show where each of your products stands against competitors
   prices [--out FILE]              Recommend price changes from your pricing rules (CSV with --out)
 
@@ -199,9 +202,22 @@ async function main() {
         break;
       }
 
+      case "market": {
+        const out = values.out ?? args[0] ?? "undercut-market.html";
+        await writeFile(out, renderMarketReport(await buildMarketView(repo, since), { since }));
+        console.log(`Wrote the market report to ${out}. Open it in a browser, or attach it to an email.`);
+        break;
+      }
+
       case "report": {
+        if ((await repo.listStores("merchant")).length === 0) {
+          const out = values.out ?? args[0] ?? "undercut-market.html";
+          await writeFile(out, renderMarketReport(await buildMarketView(repo, since), { since }));
+          console.log(`No store of your own yet, so wrote the competitor market report to ${out}.`);
+          break;
+        }
         const insights = await buildInsights(repo, config, since);
-        const out = values.out ?? "undercut-report.html";
+        const out = values.out ?? args[0] ?? "undercut-report.html";
         await writeFile(out, renderReport(insights, config, { weekOf: since }));
         console.log(`Wrote the report to ${out}. Open it in a browser, or attach it to an email.`);
         break;

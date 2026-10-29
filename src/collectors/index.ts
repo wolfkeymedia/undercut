@@ -2,7 +2,7 @@ import type { ProductSnapshot, Store, StoreObservation } from "../types.js";
 import type { Fetcher } from "./http.js";
 import { detectPromotions } from "./promotions.js";
 import type { Renderer } from "./render.js";
-import { collectShopifyFeed } from "./shopify.js";
+import { collectShopifyFeed, shopifyCurrency } from "./shopify.js";
 import { discoverProductUrls, extractStructuredProduct } from "./structured.js";
 
 export interface CollectOptions {
@@ -44,6 +44,8 @@ export async function collectStore(fetcher: Fetcher, store: Store, options: Coll
   try {
     const home = await fetcher(`${base}/`);
     if (home.status === 200) promotions = detectPromotions(home.body);
+    const currency = source !== "structured_data" && home.status === 200 ? shopifyCurrency(home.body) : undefined;
+    if (currency) products = products.map((p) => (p.currency ? p : { ...p, currency }));
     // Sale banners are often injected by scripts too.
     if (home.status === 200 && promotions.length === 0 && renderer) promotions = detectPromotions(await renderer.render(`${base}/`));
   } catch {

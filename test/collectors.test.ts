@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { collectStore } from "../src/collectors/index.js";
 import { detectPromotions } from "../src/collectors/promotions.js";
 import { collectShopifyFeed } from "../src/collectors/shopify.js";
-import { discoverProductUrls, extractStructuredProduct, stripSiteName } from "../src/collectors/structured.js";
+import { discoverProductUrls, extractStructuredProduct, stripSiteName, tidyTitle } from "../src/collectors/structured.js";
 import { fakeFetcher, shopifyFeed } from "./helpers.js";
 
 const ORIGIN = "https://ridgeway.example";
@@ -44,23 +44,18 @@ describe("Shopify feed", () => {
     });
     const products = await collectShopifyFeed(fetcher, ORIGIN);
     expect(products).toHaveLength(251);
-    expect(fetcher.calls.filter((c) => c.includes("products.json"))).toHaveLength(2);
+    expect(fetcher.calls).toHaveLength(2);
   });
 
-  it("takes the currency from the cart and skips free variants", async () => {
+  it("skips free variants", async () => {
     const feed = JSON.stringify({
       products: [
         { id: 1, title: "Gift Box", handle: "gift-box", variants: [{ price: "0.00", available: true }] },
         { id: 2, title: "Lip Kit", handle: "lip-kit", variants: [{ price: "0.00" }, { price: "32.00" }] },
       ],
     });
-    const fetcher = fakeFetcher({
-      [`${ORIGIN}/products.json?limit=250&page=1`]: feed,
-      [`${ORIGIN}/cart.js`]: JSON.stringify({ currency: "EUR", items: [] }),
-    });
-    expect(await collectShopifyFeed(fetcher, ORIGIN)).toEqual([
-      expect.objectContaining({ externalId: "2", priceCents: 3200, currency: "EUR" }),
-    ]);
+    const fetcher = fakeFetcher({ [`${ORIGIN}/products.json?limit=250&page=1`]: feed });
+    expect(await collectShopifyFeed(fetcher, ORIGIN)).toEqual([expect.objectContaining({ externalId: "2", priceCents: 3200 })]);
   });
 
   it("returns null for stores that are not on Shopify", async () => {
@@ -138,6 +133,17 @@ describe("structured product data", () => {
     );
   });
 
+  it("tidies ALL CAPS titles and adds the shade from Next.js data", () => {
+    const data = { props: { pageProps: { product: { slug: "airbrush-brightening-flawless-finish-tan-deep", sku: "AB-TD",
+      title: "AIRBRUSH BRIGHTENING FLAWLESS FINISH", shade: { name: "TAN-DEEP" }, price: { purchasePrice: { value: 54 } } } } } };
+    const html = `<html><body><script id="__NEXT_DATA__" type="application/json">${JSON.stringify(data)}</script></body></html>`;
+    expect(extractStructuredProduct(html, "https://ct.example/ie/product/airbrush-brightening-flawless-finish-tan-deep")?.title).toBe(
+      "Airbrush Brightening Flawless Finish – Tan-Deep",
+    );
+    expect(tidyTitle("PILLOW TALK LIP KIT WITH SPF 15")).toBe("Pillow Talk Lip Kit with SPF 15");
+    expect(tidyTitle("Magic Cream")).toBe("Magic Cream");
+  });
+
   it("strips the site name from titles", () => {
     expect(stripSiteName("Pillow Talk Lipstick | Charlotte Tilbury")).toBe("Pillow Talk Lipstick");
     expect(stripSiteName("Contour Kit - Sculpted by Aimee", "Sculpted by Aimee")).toBe("Contour Kit");
@@ -195,5 +201,14 @@ describe("collectStore", () => {
     expect(obs.source).toBe("structured_data");
     expect(obs.products.map((p) => p.title)).toEqual(["Decaf 250g"]);
     expect(obs.promotions.map((p) => p.key).sort()).toEqual(["percent_off:10", "sale_banner:flash sale"]);
+  });
+
+  it("takes a Shopify store's currency from its homepage", async () => {
+    const fetcher = fakeFetcher({
+      [`${ORIGIN}/products.json?limit=250&page=1`]: shopifyFeed([{ id: 1, title: "Contour Kit", price: "30.00" }]),
+      [`${ORIGIN}/`]: `<script>Shopify.currency = {"active":"EUR","rate":"1.0"};</script>`,
+    });
+    const obs = await collectStore(fetcher, { id: "sba", name: "SbA", url: ORIGIN, kind: "competitor" });
+    expect(obs.products[0]?.currency).toBe("EUR");
   });
 });

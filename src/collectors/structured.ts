@@ -191,10 +191,17 @@ export function extractFromMarkup($: cheerio.CheerioAPI, pageUrl: string): Produ
   const canonical = $('link[rel="canonical"]').attr("href") ?? meta("og:url");
   const url = canonical ? new URL(canonical, pageUrl).toString() : pageUrl;
   const rawTitle = (meta("og:title") ?? $("h1").first().text() ?? $("title").text()).replace(/\s+/g, " ").trim();
-  const title = stripSiteName(rawTitle, meta("og:site_name"));
+  const title = tidyTitle(stripSiteName(rawTitle, meta("og:site_name")));
 
   const fromNext = extractFromNextData($, url);
-  if (fromNext) return { ...fromNext, title: fromNext.title || title, url, imageUrl: fromNext.imageUrl ?? meta("og:image") };
+  if (fromNext) {
+    // The page's own title often carries the shade or size the data leaves out.
+    const base = tidyTitle(fromNext.title || title);
+    const named = title.toLowerCase().startsWith(base.toLowerCase()) && title.length > base.length ? tidyTitle(title) : base;
+    const variant = fromNext.variant && !named.toLowerCase().includes(fromNext.variant.toLowerCase()) ? ` – ${fromNext.variant}` : "";
+    const { variant: _v, ...rest } = fromNext;
+    return { ...rest, title: named + variant, url, imageUrl: fromNext.imageUrl ?? meta("og:image") };
+  }
 
   let priceCents = toCents(meta("product:price:amount") ?? meta("og:price:amount") ?? itemprop("price"));
   let currency = meta("product:price:currency") ?? meta("og:price:currency") ?? itemprop("priceCurrency");
@@ -242,6 +249,23 @@ export function extractFromMarkup($: cheerio.CheerioAPI, pageUrl: string): Produ
 }
 
 /** "Airbrush Flawless Finish | Charlotte Tilbury" -> "Airbrush Flawless Finish". */
+const KEEP_UPPER = new Set(["SPF", "UV", "CC", "BB", "XL", "XS", "XXL", "ML", "UK", "EU", "US", "LED", "PA", "AHA", "BHA"]);
+const SMALL_WORDS = new Set(["a", "an", "and", "the", "of", "with", "for", "in", "on", "to", "by", "or", "at", "&"]);
+
+/** Turns an ALL CAPS title into title case; leaves other titles alone. */
+export function tidyTitle(title: string): string {
+  if (/[a-z]/.test(title) || !/[A-Z]{2}/.test(title)) return title;
+  return title
+    .split(/(\s+)/)
+    .map((word, i) => {
+      if (/^\s+$/.test(word) || KEEP_UPPER.has(word.replace(/[^A-Z]/g, "")) || /\d/.test(word)) return word;
+      const lower = word.toLowerCase();
+      if (i > 0 && SMALL_WORDS.has(lower)) return lower;
+      return lower.replace(/(^|[-–/+(])(\p{L})/gu, (_, sep: string, c: string) => sep + c.toUpperCase());
+    })
+    .join("");
+}
+
 export function stripSiteName(title: string, siteName?: string): string {
   let t = title.replace(/\s+\|\s+[^|]+$/, "");
   if (siteName) t = t.replace(new RegExp(`\\s+[-–—]\\s+${siteName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"), "");
@@ -255,7 +279,7 @@ type JsonObject2 = Record<string, unknown>;
  * Finds the product whose slug or URL matches the page, so upsell and carousel
  * products on the same page are never mistaken for it.
  */
-function extractFromNextData($: cheerio.CheerioAPI, pageUrl: string): Omit<ProductSnapshot, "url"> | null {
+function extractFromNextData($: cheerio.CheerioAPI, pageUrl: string): (Omit<ProductSnapshot, "url"> & { variant?: string }) | null {
   const raw = $("script#__NEXT_DATA__").text();
   if (!raw) return null;
   let data: unknown;
@@ -295,6 +319,12 @@ function extractFromNextData($: cheerio.CheerioAPI, pageUrl: string): Omit<Produ
   const name = [product.title, product.name].find((x): x is string => typeof x === "string") ?? "";
   const currency = [purchase.currencyCode, purchase.currency, price.currencyCode].find((x): x is string => typeof x === "string");
   const id = [product.sku, product.id].find((x) => typeof x === "string" || typeof x === "number");
+  // Shade or size, when the product object names it separately from the title.
+  const variant = ["shade", "shadeName", "colour", "color", "variantName", "variantTitle", "size"]
+    .map((k) => product[k])
+    .map((v) => (v && typeof v === "object" ? ((v as JsonObject2).name ?? (v as JsonObject2).label ?? (v as JsonObject2).value) : v))
+    .find((v): v is string => typeof v === "string" && v.trim().length > 0)
+    ?.trim();
 
   return {
     externalId: id !== undefined ? String(id) : pageUrl,
@@ -303,5 +333,6 @@ function extractFromNextData($: cheerio.CheerioAPI, pageUrl: string): Omit<Produ
     priceCents,
     compareAtCents: listCents && listCents > priceCents ? listCents : undefined,
     available,
+    variant: variant ? tidyTitle(variant) : undefined,
   };
 }

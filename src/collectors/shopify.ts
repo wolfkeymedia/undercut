@@ -53,20 +53,18 @@ export async function collectShopifyFeed(
     }
     if (feed.products.length < PAGE_SIZE) break;
   }
-  // The feed has no currency; the storefront cart reports the store's (or region's) currency.
-  const currency = await storeCurrency(fetcher, origin);
-  return currency ? products.map((p) => ({ ...p, currency })) : products;
+  return products;
 }
 
-async function storeCurrency(fetcher: Fetcher, origin: string): Promise<string | undefined> {
-  try {
-    const res = await fetcher(`${origin}/cart.js`);
-    if (res.status !== 200) return undefined;
-    const currency = (JSON.parse(res.body) as { currency?: unknown }).currency;
-    return typeof currency === "string" && /^[A-Z]{3}$/.test(currency) ? currency : undefined;
-  } catch {
-    return undefined;
-  }
+/**
+ * The feed has no currency, but every Shopify storefront page declares the
+ * active one in a script (`Shopify.currency = {"active":"EUR",...}`).
+ */
+export function shopifyCurrency(html: string): string | undefined {
+  const m =
+    /Shopify\.currency\s*=\s*\{[^}]*"active"\s*:\s*"([A-Z]{3})"/.exec(html) ??
+    /<meta[^>]+property=["']og:price:currency["'][^>]+content=["']([A-Z]{3})["']/i.exec(html);
+  return m?.[1];
 }
 
 function parseFeed(body: string): ShopifyFeed | null {

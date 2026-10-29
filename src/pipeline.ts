@@ -7,11 +7,12 @@ import { detectChanges } from "./detect/changes.js";
 import { suggestMatches } from "./match/matcher.js";
 import type { Repository } from "./store/repository.js";
 import { DEFAULT_CONFIG, type Config } from "./config.js";
+import { buildMarket } from "./insights/market.js";
 import { buildScorecard } from "./insights/position.js";
 import { recommendPrices } from "./insights/pricing.js";
 import { describePattern, promoPatterns } from "./insights/promos.js";
 import { formatCents } from "./money.js";
-import type { ChangeEvent, ProductSnapshot, Store, StoreObservation } from "./types.js";
+import type { ChangeEvent, ProductSnapshot, Promotion, Store, StoreObservation } from "./types.js";
 
 /** Collects one store, records what changed since its last check, and saves both. */
 export async function checkStore(
@@ -139,6 +140,20 @@ export async function buildInsights(repo: Repository, config: Config, since: Dat
 }
 
 export type Insights = Awaited<ReturnType<typeof buildInsights>>;
+
+/** The competitor market as it stands: works without a merchant store. */
+export async function buildMarketView(repo: Repository, since: Date, until = new Date()) {
+  const stores = await repo.listStores("competitor");
+  const ids = new Set(stores.map((s) => s.id));
+  const products = new Map<string, ProductSnapshot[]>();
+  const promotions = new Map<string, Promotion[]>();
+  for (const s of stores) {
+    products.set(s.id, await repo.currentProducts(s.id));
+    promotions.set(s.id, (await repo.latestObservation(s.id))?.promotions ?? []);
+  }
+  const events = (await repo.listEvents(since, until)).filter((e) => ids.has(e.storeId));
+  return buildMarket({ stores, products, promotions, events });
+}
 
 export async function buildBrief(repo: Repository, since: Date, until = new Date(), config: Config = DEFAULT_CONFIG) {
   const insights = await buildInsights(repo, config, since, until);
