@@ -7,7 +7,7 @@ import { loadConfig } from "./config.js";
 import { parseEconomicsCsv } from "./costs.js";
 import { recommendationsCsv } from "./insights/pricing.js";
 import { formatCents } from "./money.js";
-import { buildBrief, buildInsights, checkStore, refreshMatches, storeIdFromUrl } from "./pipeline.js";
+import { buildBrief, buildInsights, checkStore, pairProducts, refreshMatches, storeIdFromUrl } from "./pipeline.js";
 import { renderReport } from "./report/html.js";
 import { migrate, PostgresRepository } from "./store/postgres.js";
 import type { ProductMatch, Store } from "./types.js";
@@ -26,6 +26,7 @@ Commands:
   confirm <match-number>...        Confirm matches by the number shown in "matches"
   reject <match-number>...         Reject matches by the number shown in "matches"
   confirm-above <confidence>       Confirm every suggested match at or above a confidence, e.g. 0.8
+  pair <your-url> <their-url>      Pair one of your products with an equivalent competitor product by hand
   brief [--days 7] [--out FILE]    Write the weekly brief
   report [--days 7] [--out FILE]   Write the weekly manager report as one HTML page
   scorecard                        Show where each of your products stands against competitors
@@ -158,6 +159,15 @@ async function main() {
           await repo.setMatchStatus(m, command === "confirm" ? "confirmed" : "rejected");
         }
         console.log(`${command === "confirm" ? "Confirmed" : "Rejected"} ${args.length} matches.`);
+        break;
+      }
+
+      case "pair": {
+        const [yourUrl, theirUrl] = args;
+        if (!yourUrl || !theirUrl) throw new Error("Give your product's URL, then the competitor product's URL.");
+        const { yours, theirs, competitor } = await pairProducts(repo, politeFetcher(), yourUrl, theirUrl);
+        const money = (c: number) => formatCents(c, yours.currency);
+        console.log(`Paired ${yours.title} (${money(yours.priceCents)}) with ${competitor.name}'s ${theirs.title} (${money(theirs.priceCents)}).`);
         break;
       }
 

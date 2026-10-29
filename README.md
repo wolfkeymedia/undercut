@@ -61,6 +61,8 @@ npm run cli -- run                     # check every store and suggest product m
 npm run cli -- matches                 # review suggested matches
 npm run cli -- confirm 1 2 5           # confirm by number
 npm run cli -- confirm-above 0.8       # or confirm everything above a confidence
+npm run cli -- pair https://your-store.com/products/sculpt-stick https://rival.com/product/contour-wand
+                                       # pair equivalent products by hand, for brands that sell their own lines
 npm run cli -- import-products products.csv  # unit costs and weekly sales, so every figure is in money
 
 npm run cli -- scorecard               # where each product stands, in the terminal

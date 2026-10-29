@@ -46,7 +46,7 @@ export async function collectStore(fetcher: Fetcher, store: Store, options: Coll
   return { storeId: store.id, observedAt, products: dedupe(products), promotions, source };
 }
 
-async function collectProductPages(fetcher: Fetcher, urls: string[]): Promise<ProductSnapshot[]> {
+export async function collectProductPages(fetcher: Fetcher, urls: string[]): Promise<ProductSnapshot[]> {
   const out: ProductSnapshot[] = [];
   for (const url of urls) {
     try {

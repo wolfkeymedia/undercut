@@ -1,6 +1,6 @@
 import { rankEvents } from "./brief/rank.js";
 import { writeBrief } from "./brief/write.js";
-import { collectStore, type CollectOptions } from "./collectors/index.js";
+import { collectProductPages, collectStore, type CollectOptions } from "./collectors/index.js";
 import type { Fetcher } from "./collectors/http.js";
 import { detectChanges } from "./detect/changes.js";
 import { suggestMatches } from "./match/matcher.js";
@@ -19,7 +19,9 @@ export async function checkStore(
   store: Store,
   options?: CollectOptions,
 ): Promise<{ observation: StoreObservation; events: ChangeEvent[] }> {
-  const observation = await collectStore(fetcher, store, options);
+  const tracked = await repo.trackedUrls(store.id);
+  const productUrls = [...new Set([...tracked, ...(options?.productUrls ?? [])])];
+  const observation = await collectStore(fetcher, store, { ...options, productUrls });
   const previous = await repo.latestObservation(store.id);
   // An empty result usually means we were blocked, not that the store sells nothing.
   if (observation.products.length === 0 && previous && previous.products.length > 0) {
@@ -147,6 +149,48 @@ export async function buildBrief(repo: Repository, since: Date, until = new Date
     priceActions: insights.priceActions,
   });
   return { ...brief, insights };
+}
+
+/** Product URLs compare equal regardless of query string, fragment, trailing slash or "www.". */
+export function sameProductUrl(a: string, b: string): boolean {
+  const norm = (u: string) => {
+    const x = new URL(u);
+    return `${x.host.replace(/^www\./, "")}${x.pathname.replace(/\/+$/, "")}`.toLowerCase();
+  };
+  try {
+    return norm(a) === norm(b);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Pairs one of your products with an equivalent competitor product by hand,
+ * for brands that sell their own lines rather than the same items. The pair is
+ * saved as confirmed, and the competitor page is checked on every run from now on.
+ */
+export async function pairProducts(repo: Repository, fetcher: Fetcher, yourUrl: string, theirUrl: string) {
+  const [merchant] = await repo.listStores("merchant");
+  if (!merchant) throw new Error("Add your store first with: undercut add-store <url> --merchant");
+  const yours = (await repo.currentProducts(merchant.id)).find((p) => sameProductUrl(p.url, yourUrl));
+  if (!yours) throw new Error(`${yourUrl} is not in your catalog yet. Run \`undercut run\` first, then pair again.`);
+
+  const theirHost = new URL(theirUrl).host.replace(/^www\./, "");
+  const competitor = (await repo.listStores("competitor")).find((s) => new URL(s.url).host.replace(/^www\./, "") === theirHost);
+  if (!competitor) throw new Error(`${theirHost} is not one of your competitors. Add it with: undercut add-store https://${theirHost}`);
+
+  let theirs = (await repo.currentProducts(competitor.id)).find((p) => sameProductUrl(p.url, theirUrl));
+  if (!theirs) {
+    // Not collected yet (stores without a Shopify feed are read page by page): read this page now.
+    [theirs] = await collectProductPages(fetcher, [theirUrl]);
+    if (!theirs) throw new Error(`Couldn't read a product and price from ${theirUrl}.`);
+  }
+  await repo.addTrackedUrl(competitor.id, theirs.url);
+
+  const key = { merchantExternalId: yours.externalId, competitorStoreId: competitor.id, competitorExternalId: theirs.externalId };
+  await repo.saveSuggestedMatches([{ ...key, confidence: 1, status: "suggested" }]);
+  await repo.setMatchStatus(key, "confirmed");
+  return { yours, theirs, competitor };
 }
 
 export function storeIdFromUrl(url: string): string {

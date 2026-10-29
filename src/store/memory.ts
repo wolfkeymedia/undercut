@@ -67,5 +67,15 @@ export class MemoryRepository implements Repository {
     if (m) m.status = status;
   }
 
+  private tracked = new Map<string, Set<string>>();
+  async addTrackedUrl(storeId: string, url: string) {
+    const set = this.tracked.get(storeId) ?? new Set<string>();
+    set.add(url);
+    this.tracked.set(storeId, set);
+  }
+  async trackedUrls(storeId: string) {
+    return [...(this.tracked.get(storeId) ?? [])];
+  }
+
   async close() {}
 }
