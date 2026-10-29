@@ -24,6 +24,14 @@ export interface ProductSnapshot {
   available: boolean;
   /** Merchant-only: unit cost, used to work out margin in the brief. */
   costCents?: number;
+  /** Merchant-only: typical units sold per week, used to put a money figure on changes. */
+  unitsPerWeek?: number;
+}
+
+/** What the merchant tells us about one of its products. Missing fields keep their stored value. */
+export interface ProductEconomics {
+  costCents?: number;
+  unitsPerWeek?: number;
 }
 
 export interface Promotion {

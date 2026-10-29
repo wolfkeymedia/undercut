@@ -3,6 +3,8 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { collapse, rankEvents } from "../src/brief/rank.js";
 import { renderPlainBrief, writeBrief } from "../src/brief/write.js";
 import { buildBrief, checkStore, refreshMatches } from "../src/pipeline.js";
+import { DEFAULT_CONFIG } from "../src/config.js";
+import { renderReport } from "../src/report/html.js";
 import { MemoryRepository } from "../src/store/memory.js";
 import type { ChangeEvent, Store } from "../src/types.js";
 import { fakeFetcher, shopifyFeed } from "./helpers.js";
@@ -36,7 +38,7 @@ describe("end to end", () => {
     await checkStore(repo, fetcher, ridgeway);
     expect(await refreshMatches(repo)).toBe(2);
     for (const m of await repo.listMatches("suggested")) await repo.setMatchStatus(m, "confirmed");
-    await repo.setCosts(merchant.id, new Map([["10", 2000]]));
+    await repo.setEconomics(merchant.id, new Map([["10", { costCents: 2000, unitsPerWeek: 40 }]]));
 
     // A week later: Ridgeway undercuts on espresso, sells out of Ethiopia and starts a sale.
     ridgewayFeed = shopifyFeed([
@@ -47,13 +49,24 @@ describe("end to end", () => {
     const { events } = await checkStore(repo, fetcher, ridgeway);
     expect(events.map((e) => e.kind).sort()).toEqual(["out_of_stock", "price_drop", "promo_started", "promo_started"]);
 
-    const { markdown, writer } = await buildBrief(repo, start);
+    const { markdown, writer, insights } = await buildBrief(repo, start);
     expect(writer).toBe("template");
+    expect(markdown).toContain("About $280.00 a week of your sales is exposed to cheaper competitors ($124.44 of margin).");
+    expect(markdown).toContain("## Prices to change");
+    expect(markdown).toContain("Espresso Blend 1kg: hold at $36.00.");
     expect(markdown).toContain("Ridgeway Roasters cut Espresso Blend Whole Bean 1kg from $38.00 to $32.50 (-14%). That is $3.50 below your Espresso Blend 1kg.");
-    expect(markdown).toContain("Matching at $32.50 keeps a 38% margin.");
+    expect(markdown).toContain("Matching at $32.50 would give up $140.00 a week in margin to protect about $124.44.");
     expect(markdown).toContain("Feature Ethiopia Yirgacheffe 250g on your homepage");
     // The undercut on a matched product outranks everything else.
     expect(markdown.indexOf("cut Espresso")).toBeLessThan(markdown.indexOf("out of stock"));
+
+    const html = renderReport(insights, DEFAULT_CONFIG, { weekOf: start });
+    expect(html).toContain("<title>Northfield Coffee Co. · Undercut weekly report</title>");
+    expect(html).toContain("$280.00");
+    expect(html).toContain("Prices to change this week");
+    expect(html).toContain('<span class="pill neutral">Hold</span>');
+    expect(html).toContain("saves $35.96");
+    expect(html).toContain("Rivals out of stock");
   });
 });
 
@@ -75,6 +88,25 @@ describe("ranking", () => {
       ev({ externalId: "1", kind: "price_increase", beforeCents: 800, afterCents: 1000, occurredAt: at(2) }),
     ]);
     expect(out).toEqual([]);
+  });
+
+  it("reports one promotion per banner, keeping the code", () => {
+    const text = "20% off sitewide with code BREW20";
+    const out = collapse([
+      ev({ kind: "promo_started", promoKey: "discount_code:BREW20", title: text, detail: "BREW20" }),
+      ev({ kind: "promo_started", promoKey: "percent_off:20", title: text }),
+    ]);
+    expect(out).toEqual([expect.objectContaining({ promoKey: "percent_off:20", detail: "BREW20" })]);
+  });
+
+  it("says how much cheaper you are after a rival raises its price", () => {
+    const [item] = rankEvents({
+      events: [ev({ externalId: "1", kind: "price_increase", beforeCents: 3200, afterCents: 3400 })],
+      stores: [ridgeway],
+      matches: [{ merchantExternalId: "10", competitorStoreId: "ridgeway", competitorExternalId: "1", confidence: 0.9, status: "confirmed" }],
+      merchantProducts: [{ externalId: "10", title: "Dripper", url: "u", priceCents: 2800, available: true }],
+    });
+    expect(item?.suggestion).toBe("You are now $6.00 cheaper on Dripper. Say so in ads and on the product page.");
   });
 
   it("warns against matching a price that would wreck the margin", () => {

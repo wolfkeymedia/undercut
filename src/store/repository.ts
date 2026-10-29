@@ -1,4 +1,4 @@
-import type { ChangeEvent, ProductMatch, ProductSnapshot, Store, StoreObservation } from "../types.js";
+import type { ChangeEvent, ProductEconomics, ProductMatch, ProductSnapshot, Store, StoreObservation } from "../types.js";
 
 /** Everything the pipeline needs to persist. Postgres in production, memory in tests. */
 export interface Repository {
@@ -8,9 +8,9 @@ export interface Repository {
 
   saveObservation(observation: StoreObservation): Promise<void>;
   latestObservation(storeId: string): Promise<StoreObservation | null>;
-  /** Merchant-supplied unit costs, keyed by product externalId. */
-  setCosts(storeId: string, costs: Map<string, number>): Promise<void>;
-  /** Current products of a store, with costs merged in for the merchant. */
+  /** Merchant-supplied unit costs and sales velocity, keyed by product externalId. */
+  setEconomics(storeId: string, economics: Map<string, ProductEconomics>): Promise<void>;
+  /** Current products of a store, with costs and sales velocity merged in for the merchant. */
   currentProducts(storeId: string): Promise<ProductSnapshot[]>;
 
   saveEvents(events: ChangeEvent[]): Promise<void>;
