@@ -20,6 +20,13 @@ export interface PricingConfig {
 
 export interface Config {
   pricing: PricingConfig;
+  collect: {
+    /**
+     * "auto": load a page in a headless browser when its prices only appear after
+     * JavaScript runs (needs Playwright's Chromium installed). "never": skip such pages.
+     */
+    renderJavaScript: "auto" | "never";
+  };
   /**
    * Share of a product's weekly sales assumed at risk for each 1% a cheaper rival
    * undercuts you. 2 means a rival 5% cheaper puts 10% of that product's sales at risk.
@@ -46,6 +53,7 @@ export const DEFAULT_CONFIG: Config = {
     minChangePercent: 1,
     rounding: "99",
   },
+  collect: { renderJavaScript: "auto" },
   priceSensitivity: 2,
   maxShareAtRisk: 0.6,
   alerts: { minScore: 50 },
@@ -53,7 +61,7 @@ export const DEFAULT_CONFIG: Config = {
 
 /** Reads undercut.config.json if present, filling anything it leaves out with defaults. */
 export async function loadConfig(path = process.env.UNDERCUT_CONFIG ?? "undercut.config.json"): Promise<Config> {
-  let file: Partial<Config> & { pricing?: Partial<PricingConfig>; alerts?: Partial<Config["alerts"]> } = {};
+  let file: Partial<Config> & { pricing?: Partial<PricingConfig>; alerts?: Partial<Config["alerts"]>; collect?: Partial<Config["collect"]> } = {};
   try {
     file = JSON.parse(await readFile(path, "utf8"));
   } catch (err) {
@@ -63,6 +71,7 @@ export async function loadConfig(path = process.env.UNDERCUT_CONFIG ?? "undercut
     ...DEFAULT_CONFIG,
     ...file,
     pricing: { ...DEFAULT_CONFIG.pricing, ...file.pricing },
+    collect: { ...DEFAULT_CONFIG.collect, ...file.collect },
     alerts: {
       ...DEFAULT_CONFIG.alerts,
       ...file.alerts,

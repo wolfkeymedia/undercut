@@ -2,6 +2,7 @@ import { rankEvents } from "./brief/rank.js";
 import { writeBrief } from "./brief/write.js";
 import { collectProductPages, collectStore, type CollectOptions } from "./collectors/index.js";
 import type { Fetcher } from "./collectors/http.js";
+import type { Renderer } from "./collectors/render.js";
 import { detectChanges } from "./detect/changes.js";
 import { suggestMatches } from "./match/matcher.js";
 import type { Repository } from "./store/repository.js";
@@ -169,7 +170,7 @@ export function sameProductUrl(a: string, b: string): boolean {
  * for brands that sell their own lines rather than the same items. The pair is
  * saved as confirmed, and the competitor page is checked on every run from now on.
  */
-export async function pairProducts(repo: Repository, fetcher: Fetcher, yourUrl: string, theirUrl: string) {
+export async function pairProducts(repo: Repository, fetcher: Fetcher, yourUrl: string, theirUrl: string, renderer: Renderer | null = null) {
   const [merchant] = await repo.listStores("merchant");
   if (!merchant) throw new Error("Add your store first with: undercut add-store <url> --merchant");
   const yours = (await repo.currentProducts(merchant.id)).find((p) => sameProductUrl(p.url, yourUrl));
@@ -182,7 +183,7 @@ export async function pairProducts(repo: Repository, fetcher: Fetcher, yourUrl: 
   let theirs = (await repo.currentProducts(competitor.id)).find((p) => sameProductUrl(p.url, theirUrl));
   if (!theirs) {
     // Not collected yet (stores without a Shopify feed are read page by page): read this page now.
-    [theirs] = await collectProductPages(fetcher, [theirUrl]);
+    [theirs] = await collectProductPages(fetcher, [theirUrl], renderer);
     if (!theirs) throw new Error(`Couldn't read a product and price from ${theirUrl}.`);
   }
   await repo.addTrackedUrl(competitor.id, theirs.url);

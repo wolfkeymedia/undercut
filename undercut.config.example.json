@@ -8,6 +8,9 @@
     "minChangePercent": 1,
     "rounding": "99"
   },
+  "collect": {
+    "renderJavaScript": "auto"
+  },
   "priceSensitivity": 2,
   "maxShareAtRisk": 0.6,
   "alerts": {
