@@ -14,8 +14,8 @@ export interface PricingConfig {
   maxChangePercent: number;
   /** Ignore recommendations smaller than this, in percent, so prices don't churn. */
   minChangePercent: number;
-  /** End recommended prices in .99 (charm pricing) or leave them as computed. */
-  rounding: "99" | "none";
+  /** End recommended prices like the current price ("match"), in .99 or .95, or leave them as computed. */
+  rounding: "match" | "99" | "95" | "none";
 }
 
 export interface Config {
@@ -51,7 +51,7 @@ export const DEFAULT_CONFIG: Config = {
     minMarginPercent: 25,
     maxChangePercent: 15,
     minChangePercent: 1,
-    rounding: "99",
+    rounding: "match",
   },
   collect: { renderJavaScript: "auto" },
   priceSensitivity: 2,

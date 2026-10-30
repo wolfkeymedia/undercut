@@ -94,7 +94,7 @@ Copy `undercut.config.example.json` to `undercut.config.json` to change the defa
 - `pricing.strategy`: `beat` (a little under the cheapest rival), `match`, or `premium` (a set percent above).
 - `pricing.minMarginPercent`: never recommend a price below this margin. Default 25.
 - `pricing.maxChangePercent`: the largest single price move. Default 15.
-- `pricing.rounding`: `99` to end prices in .99, or `none`.
+- `pricing.rounding`: `match` (default) to keep each product's own price ending, such as .95; `99` or `95` to force one; or `none`.
 - `priceSensitivity` and `maxShareAtRisk`: the sales-at-risk estimate above.
 - `alerts.webhookUrl` (or `UNDERCUT_ALERT_WEBHOOK`): where urgent changes are posted. `alerts.minScore` sets how urgent.
 

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { sendAlerts } from "../src/alerts.js";
 import { rankEvents } from "../src/brief/rank.js";
-import { DEFAULT_CONFIG } from "../src/config.js";
+import { DEFAULT_CONFIG as BASE_CONFIG } from "../src/config.js";
+
+// These cases were worked out with charm pricing.
+const DEFAULT_CONFIG = { ...BASE_CONFIG, pricing: { ...BASE_CONFIG.pricing, rounding: "99" as const } };
 import { parseEconomicsCsv } from "../src/costs.js";
 import { buildScorecard } from "../src/insights/position.js";
 import { recommendationsCsv, recommendPrices, roundPrice } from "../src/insights/pricing.js";
@@ -272,5 +275,13 @@ describe("product economics CSV", () => {
 
   it("explains a bad header", () => {
     expect(() => parseEconomicsCsv(`name,price\nx,1`, products)).toThrow("needs a header");
+  });
+});
+
+describe("price endings", () => {
+  it("keeps the store's own price ending", () => {
+    expect(roundPrice(1719, "match", 0, 1495)).toBe(1695);
+    expect(roundPrice(1719, "99")).toBe(1699);
+    expect(roundPrice(3217, "match", 0, 3600)).toBe(3200);
   });
 });

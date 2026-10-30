@@ -20,7 +20,9 @@ describe("market view", () => {
     expect(categorize({ title: "Contour Kit" })).toBe("Kits & sets");
     expect(categorize({ title: "Pillow Talk Lip Cheat" })).toBe("Lip liner");
     expect(categorize({ title: "Airbrush Flawless Foundation" })).toBe("Foundation");
-    expect(categorize({ title: "Gift Card", productType: "Gift Cards" })).toBe("Gift Cards");
+    expect(categorize({ title: "Hot Lips Lipstick", productType: "Hot Lips 2" })).toBe("Lipstick");
+    expect(categorize({ title: "Kissing Collection Gift", productType: "K.I.S.S.I.N.G" })).toBe("Kits & sets");
+    expect(categorize({ title: "Mystery Thing", productType: "Hot Lips 2" })).toBe("Other");
     expect(categorize({ title: "Airbrush Brightening Flawless Finish", productType: "Powder" })).toBe("Powder");
     expect(categorize({ title: "Mini Lash Lift Mascara" })).toBe("Minis");
     expect(categorize({ title: "The Everyday Glow Edit" })).toBe("Kits & sets");

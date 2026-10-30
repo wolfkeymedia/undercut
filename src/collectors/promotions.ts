@@ -82,7 +82,8 @@ export function detectPromotions(html: string): Promotion[] {
 function splitSentences(text: string): string[] {
   return text
     .split(/(?<=[.!|•·])\s+|\s{2,}/)
-    .map((s) => s.trim())
+    // Carousel controls often sit inside the banner and come out as a leading "Previous".
+    .map((s) => s.trim().replace(/^(?:previous|next|prev)\b[\s:]*/i, ""))
     .filter((s) => s.length > 3)
     .map((s) => (s.length > 200 ? s.slice(0, 200) : s));
 }

@@ -65,7 +65,7 @@ describe("end to end", () => {
     expect(html).toContain("$280.00");
     expect(html).toContain("Prices to change this week");
     expect(html).toContain('<span class="pill neutral">Hold</span>');
-    expect(html).toContain("saves $35.96");
+    expect(html).toContain("saves $35.56");
     expect(html).toContain("Rivals out of stock");
   });
 });

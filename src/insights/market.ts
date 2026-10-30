@@ -59,7 +59,7 @@ export interface PricePosition {
 
 // First match wins, so kits and multi-packs are compared with each other rather than with single products.
 const CATEGORIES: [string, RegExp][] = [
-  ["Kits & sets", /\b(kits?|sets?|trio|trilogy|bundle|collection|gift box|vault|edit|routine|look|crackers?|advent)\b|\bduo\b.*[+&]|[+&].*\bduo\b|\bduo\b.* and /i],
+  ["Kits & sets", /\b(kits?|sets?|trio|trilogy|bundle|collection|gift box|vault|edit|routine|look|combo|crackers?|advent)\b|\bduo\b.*[+&]|[+&].*\bduo\b|\bduo\b.* and /i],
   ["Minis", /\bminis?\b|\btravel\b|\bsample/i],
   ["Tanning", /\btanning\b|self.?tan|\btan (mousse|water|lotion|serum|drops|mist|foam|mitt)|bronzing (drops|water|mousse)|\bglow drops/i],
   ["Palettes", /\bpalettes?\b/i],
@@ -95,11 +95,11 @@ export function isComparable(p: Pick<ProductSnapshot, "title" | "productType">):
 }
 
 export function categorize(p: Pick<ProductSnapshot, "title" | "productType">): string {
-  // Minis and kits go by title; otherwise the store's own category is the better signal.
-  for (const [name, re] of CATEGORIES.slice(0, 2)) if (re.test(p.title)) return name;
+  // The title is the most specific signal; a store's own section only decides when the title says nothing.
+  // Unknown sections stay "Other": stores also file products under campaign names ("Hot Lips 2").
+  for (const [name, re] of CATEGORIES) if (re.test(p.title)) return name;
   if (p.productType) for (const [name, re] of CATEGORIES.slice(2)) if (re.test(p.productType)) return name;
-  for (const [name, re] of CATEGORIES.slice(2)) if (re.test(p.title)) return name;
-  return p.productType?.trim() || "Other";
+  return "Other";
 }
 
 export function buildMarket(input: {
