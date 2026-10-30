@@ -35,12 +35,33 @@ export interface Market {
   moves: ChangeEvent[];
   /** Event counts per store, including new and removed products. */
   counts: Map<string, Partial<Record<ChangeEvent["kind"], number>>>;
+  /** With your own store: categories rivals sell that you don't, or barely do. */
+  gaps: RangeGap[];
+  /** With your own store: categories where your median sits far below or above the cheapest rival's. */
+  pricePositions: PricePosition[];
+}
+
+export interface RangeGap {
+  category: string;
+  /** How many products you sell in it: 0 for a missing category, a few for a thin one. */
+  yourCount: number;
+  rivals: { store: Store; count: number; medianCents: number; examples: ProductSnapshot[] }[];
+}
+
+export interface PricePosition {
+  category: string;
+  yourMedianCents: number;
+  cheapestRival: { store: Store; medianCents: number };
+  /** Your median against the cheapest rival's, in percent: -40 means 40% cheaper. */
+  gapPercent: number;
+  signal: "headroom" | "above_rival";
 }
 
 // First match wins, so kits and multi-packs are compared with each other rather than with single products.
 const CATEGORIES: [string, RegExp][] = [
   ["Kits & sets", /\b(kits?|sets?|trio|trilogy|bundle|collection|gift box|vault|edit|routine|look|crackers?|advent)\b|\bduo\b.*[+&]|[+&].*\bduo\b|\bduo\b.* and /i],
   ["Minis", /\bminis?\b|\btravel\b|\bsample/i],
+  ["Tanning", /\btanning\b|self.?tan|\btan (mousse|water|lotion|serum|drops|mist|foam|mitt)|bronzing (drops|water|mousse)|\bglow drops/i],
   ["Palettes", /\bpalettes?\b/i],
   ["Foundation", /\bfoundation|\bskin tint/i],
   ["Concealer", /\bconcealer/i],
@@ -54,18 +75,20 @@ const CATEGORIES: [string, RegExp][] = [
   ["Lip liner", /\blip ?liner|\blip cheat/i],
   ["Lip gloss", /\blip ?gloss|\blip oil|\blip lustre/i],
   ["Lipstick", /\blipstick|\blip colou?r|\blip\b/i],
-  ["Mascara", /\bmascara/i],
+  ["Mascara", /mascara/i],
   ["Lashes", /\blash/i],
   ["Eyeliner", /\beye ?liner|\bkohl/i],
   ["Eyeshadow", /\beye ?shadow|\beye colou?r/i],
   ["Brows", /\bbrow/i],
   ["Brushes & tools", /\bbrush|\bsponge|\bblender|\bsharpener/i],
   ["Skincare", /\bcream|\bserum|\bmoisturi|\bcleans|\btoner|\bmask|\bbalm|\bspf\b|\beye care/i],
+  ["Nails", /\bnails?\b|press.?ons?/i],
+  ["Bags & cases", /\b(make.?up |cosmetic |wash )?bag\b|\bpouch\b|\bvanity case/i],
   ["Fragrance", /\bfragrance|\bperfume|\beau de\b/i],
 ];
 
 // Gift cards, courses and merchandise are not products anyone prices against.
-const NOT_PRODUCTS = /\b(e-?gift|gift ?cards?|vouchers?|courses?|academy|masterclass|workshops?|application|appointment|notebook|sweatshirt|hoodie|t-shirt|tee|merch(andise)?|tote)\b/i;
+const NOT_PRODUCTS = /\b(e-?gift|gift ?cards?|vouchers?|courses?|academy|masterclass|workshops?|application|appointment|add your products|buy more,? save more|key ?chain|keyring|notebook|sweatshirt|hoodie|t-shirt|tee|merch(andise)?|tote)\b/i;
 
 export function isComparable(p: Pick<ProductSnapshot, "title" | "productType">): boolean {
   return !NOT_PRODUCTS.test(p.title) && !NOT_PRODUCTS.test(p.productType ?? "");
@@ -84,6 +107,8 @@ export function buildMarket(input: {
   products: Map<string, ProductSnapshot[]>;
   promotions: Map<string, Promotion[]>;
   events: ChangeEvent[];
+  /** Your own store's id, to find range gaps and price positions against the rest. */
+  merchantId?: string;
 }): Market {
   const comparable = new Map([...input.products].map(([id, list]) => [id, list.filter(isComparable)]));
   const summaries = input.stores.map((store): StoreSummary => {
@@ -145,7 +170,63 @@ export function buildMarket(input: {
     .sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime())
     .slice(0, 20);
 
-  return { summaries, categories, offers, moves, counts };
+  const { gaps, pricePositions } = input.merchantId
+    ? compareWithMerchant(input.merchantId, input.stores, comparable)
+    : { gaps: [], pricePositions: [] };
+
+  return { summaries, categories, offers, moves, counts, gaps, pricePositions };
+}
+
+// A category counts as thin when rivals sell at least this many times more of it.
+const THIN_RATIO = 4;
+// Medians this far under the cheapest rival suggest room to raise prices.
+const HEADROOM_PERCENT = -35;
+
+function compareWithMerchant(merchantId: string, stores: Store[], comparable: Map<string, ProductSnapshot[]>) {
+  const byCategory = new Map<string, Map<string, ProductSnapshot[]>>();
+  for (const store of stores) {
+    for (const p of comparable.get(store.id) ?? []) {
+      const cat = categorize(p);
+      if (cat === "Other") continue;
+      const m = byCategory.get(cat) ?? new Map<string, ProductSnapshot[]>();
+      m.set(store.id, [...(m.get(store.id) ?? []), p]);
+      byCategory.set(cat, m);
+    }
+  }
+  const rivals = stores.filter((s) => s.id !== merchantId);
+  const gaps: RangeGap[] = [];
+  const pricePositions: PricePosition[] = [];
+
+  for (const [category, m] of byCategory) {
+    const yours = m.get(merchantId) ?? [];
+    const theirs = rivals
+      .map((store) => ({ store, products: m.get(store.id) ?? [] }))
+      .filter((r) => r.products.length > 0)
+      .map((r) => {
+        const medianCents = median(r.products.map((p) => p.priceCents))!;
+        // In-stock products nearest the median price are the most typical examples.
+        const examples = r.products
+          .filter((p) => p.available)
+          .sort((a, b) => Math.abs(a.priceCents - medianCents) - Math.abs(b.priceCents - medianCents))
+          .slice(0, 3);
+        return { store: r.store, count: r.products.length, medianCents, examples };
+      });
+    if (theirs.length === 0) continue;
+    const most = Math.max(...theirs.map((r) => r.count));
+    if (yours.length === 0 ? most >= 2 : most >= 5 && most >= yours.length * THIN_RATIO) {
+      gaps.push({ category, yourCount: yours.length, rivals: theirs });
+    }
+    if (yours.length > 0) {
+      const yourMedianCents = median(yours.map((p) => p.priceCents))!;
+      const cheapest = theirs.reduce((a, b) => (b.medianCents < a.medianCents ? b : a));
+      const gapPercent = Math.round((yourMedianCents / cheapest.medianCents - 1) * 100);
+      const signal = gapPercent <= HEADROOM_PERCENT ? "headroom" : gapPercent > 0 ? "above_rival" : undefined;
+      if (signal) pricePositions.push({ category, yourMedianCents, cheapestRival: { store: cheapest.store, medianCents: cheapest.medianCents }, gapPercent, signal });
+    }
+  }
+  gaps.sort((a, b) => a.yourCount - b.yourCount || Math.max(...b.rivals.map((r) => r.count)) - Math.max(...a.rivals.map((r) => r.count)));
+  pricePositions.sort((a, b) => (a.signal === b.signal ? a.gapPercent - b.gapPercent : a.signal === "above_rival" ? -1 : 1));
+  return { gaps, pricePositions };
 }
 
 function percentOff(p: ProductSnapshot): number {

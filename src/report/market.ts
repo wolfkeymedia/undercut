@@ -98,6 +98,44 @@ export function renderMarketReport(market: Market, options: { title?: string; si
     })
     .join("");
 
+  const you = market.summaries[0];
+  const gapSection = market.gaps.length
+    ? `<section>
+    <h2>Range gaps</h2>
+    <p class="sub" style="margin-bottom:10px">Categories your rivals sell that ${esc(you!.store.name)} doesn't, or only barely does, with typical products and prices.</p>
+    <div class="scroll"><table class="wide"><thead><tr><th>Category</th><th class="num">You</th><th>What rivals sell</th></tr></thead><tbody>${market.gaps
+      .slice(0, 10)
+      .map(
+        (g) => `<tr><td class="strong">${esc(g.category)}</td><td class="num">${g.yourCount === 0 ? `<span class="pill bad">None</span>` : `${g.yourCount}`}</td><td>${g.rivals
+          .map(
+            (r) =>
+              `<div><b>${esc(r.store.name)}</b>: ${r.count} ${r.count === 1 ? "product" : "products"}, median ${money(r.store.id, r.medianCents)}${
+                r.examples.length ? `<div class="sub">${r.examples.map((p) => `${esc(p.title)} ${money(r.store.id, p.priceCents)}`).join(" · ")}</div>` : ""
+              }</div>`,
+          )
+          .join("")}</td></tr>`,
+      )
+      .join("")}</tbody></table></div>
+  </section>`
+    : "";
+
+  const positionSection = market.pricePositions.length
+    ? `<section>
+    <h2>Where prices could move</h2>
+    <p class="sub" style="margin-bottom:10px">Category medians against the cheapest rival. Far below suggests room to raise prices; above means a rival is cheaper. Pair products for exact recommendations.</p>
+    <div class="scroll"><table><thead><tr><th>Category</th><th class="num">You</th><th>Cheapest rival</th><th class="num">Gap</th><th></th></tr></thead><tbody>${market.pricePositions
+      .map(
+        (p) => `<tr><td>${esc(p.category)}</td><td class="num">${money(you!.store.id, p.yourMedianCents)}</td><td>${esc(p.cheapestRival.store.name)} <span class="num">${money(
+          p.cheapestRival.store.id,
+          p.cheapestRival.medianCents,
+        )}</span></td><td class="num">${p.gapPercent > 0 ? "+" : ""}${p.gapPercent}%</td><td>${
+          p.signal === "headroom" ? `<span class="pill good">Room to raise</span>` : `<span class="pill bad">Rival cheaper</span>`
+        }</td></tr>`,
+      )
+      .join("")}</tbody></table></div>
+  </section>`
+    : "";
+
   const catalogueNotes = market.summaries
     .map((s) => {
       const c = market.counts.get(s.store.id);
@@ -132,6 +170,9 @@ table.cats td:first-child { min-width: 150px; }
     <h2>Brand by brand</h2>
     <div class="scroll"><table><thead><tr><th>Brand</th><th class="num">Products</th><th class="num">Cheapest</th><th class="num">Median price</th><th class="num">Dearest</th><th class="num">On offer</th></tr></thead><tbody>${brandRows}</tbody></table></div>
   </section>
+
+  ${gapSection}
+  ${positionSection}
 
   <section>
     <h2>Price by category</h2>

@@ -144,7 +144,8 @@ export type Insights = Awaited<ReturnType<typeof buildInsights>>;
 /** The competitor market as it stands: works without a merchant store. */
 export async function buildMarketView(repo: Repository, since: Date, until = new Date()) {
   // Your own store, when added, comes first so every row reads as you against the market.
-  const stores = [...(await repo.listStores("merchant")), ...(await repo.listStores("competitor"))];
+  const merchants = await repo.listStores("merchant");
+  const stores = [...merchants, ...(await repo.listStores("competitor"))];
   const ids = new Set(stores.map((s) => s.id));
   const products = new Map<string, ProductSnapshot[]>();
   const promotions = new Map<string, Promotion[]>();
@@ -153,7 +154,7 @@ export async function buildMarketView(repo: Repository, since: Date, until = new
     promotions.set(s.id, (await repo.latestObservation(s.id))?.promotions ?? []);
   }
   const events = (await repo.listEvents(since, until)).filter((e) => ids.has(e.storeId));
-  return buildMarket({ stores, products, promotions, events });
+  return buildMarket({ stores, products, promotions, events, merchantId: merchants[0]?.id });
 }
 
 export async function buildBrief(repo: Repository, since: Date, until = new Date(), config: Config = DEFAULT_CONFIG) {
