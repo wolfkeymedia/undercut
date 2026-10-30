@@ -25,7 +25,7 @@ your store ────────► collectors ──► your catalog + unit 
                                          └──► product matcher ──► ranked brief ──► Claude (or template)
 ```
 
-- **Collectors** (`src/collectors`) read a store's public Shopify product feed when it has one (one request per 250 products). Other stores are read page by page from their sitemap, using the schema.org product data most stores publish for Google Shopping. The homepage is scanned for promotions: percent or amount off, discount codes, free-shipping thresholds and named sales. Requests identify themselves, are spaced out per host and respect `robots.txt`.
+- **Collectors** (`src/collectors`) read a store's public Shopify product feed when it has one (one request per 250 products). Other stores are read page by page from their sitemap, using the schema.org product data most stores publish for Google Shopping. The homepage is scanned for promotions: percent or amount off, discount codes, free-shipping thresholds and named sales. Requests identify themselves, are spaced out per host and respect `robots.txt`. Stores that fill in prices with JavaScript are loaded in a headless browser (Playwright's Chromium) when it is installed. A store can be a regional part of a site, such as `https://brand.com/ie`, which keeps prices, currency and sitemaps to that region.
 - **Change detection** (`src/detect`) compares each check with the previous one and records price drops and rises, stock-outs, restocks, new and removed products, and promotions starting or ending. The first check of a store is a baseline.
 - **Matching** (`src/match`) suggests which competitor product corresponds to each of yours, using title similarity with sizes and quantities taken into account. Suggestions only count once you confirm them.
 - **Insights** (`src/insights`) build the scorecard (where each product stands, a price index per competitor, sales at risk), turn your pricing rules into recommended prices, and find each competitor's promotion rhythm.
@@ -45,6 +45,7 @@ Requires Node 22+ and Postgres 14+.
 
 ```sh
 npm install
+npx playwright install chromium   # optional: for stores that fill in prices with JavaScript
 cp .env.example .env          # then fill in DATABASE_URL, and ANTHROPIC_API_KEY if you have one
 export $(grep -v '^#' .env | xargs)
 npm run db:migrate
@@ -61,13 +62,20 @@ npm run cli -- run                     # check every store and suggest product m
 npm run cli -- matches                 # review suggested matches
 npm run cli -- confirm 1 2 5           # confirm by number
 npm run cli -- confirm-above 0.8       # or confirm everything above a confidence
+npm run cli -- pair https://your-store.com/products/sculpt-stick https://rival.com/product/contour-wand
+                                       # pair equivalent products by hand, for brands that sell their own lines
 npm run cli -- import-products products.csv  # unit costs and weekly sales, so every figure is in money
 
 npm run cli -- scorecard               # where each product stands, in the terminal
 npm run cli -- prices --out prices.csv # recommended price changes
 npm run cli -- report --out report.html
+npm run cli -- market --out market.html  # competitors only: brands, prices by category, offers, promotions
 npm run cli -- brief --days 7 --out brief.md
 ```
+
+Until your own store is added, `report` writes the market report instead, so there is something to look at after the first run.
+
+On Windows PowerShell, npm can swallow flags such as `--name` and `--out`. Pass them positionally (`npm run cli add-store https://brand.com "Brand Name"`, `npm run cli market market.html`) or run the CLI directly: `npx tsx src/cli.ts market --out market.html`.
 
 Run `run` on a schedule (cron, or your host's scheduler) once or several times a day. Changes accumulate between runs and `brief` reports the last N days.
 
@@ -86,7 +94,7 @@ Copy `undercut.config.example.json` to `undercut.config.json` to change the defa
 - `pricing.strategy`: `beat` (a little under the cheapest rival), `match`, or `premium` (a set percent above).
 - `pricing.minMarginPercent`: never recommend a price below this margin. Default 25.
 - `pricing.maxChangePercent`: the largest single price move. Default 15.
-- `pricing.rounding`: `99` to end prices in .99, or `none`.
+- `pricing.rounding`: `match` (default) to keep each product's own price ending, such as .95; `99` or `95` to force one; or `none`.
 - `priceSensitivity` and `maxShareAtRisk`: the sales-at-risk estimate above.
 - `alerts.webhookUrl` (or `UNDERCUT_ALERT_WEBHOOK`): where urgent changes are posted. `alerts.minScore` sets how urgent.
 

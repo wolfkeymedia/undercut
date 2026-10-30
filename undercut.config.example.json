@@ -6,7 +6,10 @@
     "minMarginPercent": 25,
     "maxChangePercent": 15,
     "minChangePercent": 1,
-    "rounding": "99"
+    "rounding": "match"
+  },
+  "collect": {
+    "renderJavaScript": "auto"
   },
   "priceSensitivity": 2,
   "maxShareAtRisk": 0.6,

@@ -2,13 +2,15 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { politeFetcher } from "./collectors/http.js";
+import { browserRenderer } from "./collectors/render.js";
 import { sendAlerts } from "./alerts.js";
 import { loadConfig } from "./config.js";
 import { parseEconomicsCsv } from "./costs.js";
 import { recommendationsCsv } from "./insights/pricing.js";
 import { formatCents } from "./money.js";
-import { buildBrief, buildInsights, checkStore, refreshMatches, storeIdFromUrl } from "./pipeline.js";
+import { buildBrief, buildInsights, buildMarketView, checkStore, pairProducts, refreshMatches, storeIdFromUrl } from "./pipeline.js";
 import { renderReport } from "./report/html.js";
+import { renderMarketReport } from "./report/market.js";
 import { migrate, PostgresRepository } from "./store/postgres.js";
 import type { ProductMatch, Store } from "./types.js";
 
@@ -17,7 +19,7 @@ const HELP = `Usage: undercut <command> [options]
 Commands:
   migrate                          Create or update the database tables
   add-store <url> --merchant       Add your own store
-  add-store <url> [--name NAME]    Add a competitor
+  add-store <url> [NAME]           Add a competitor (or --name NAME)
   stores                           List stores
   import-products <file.csv>       Load unit costs and weekly unit sales for your products
                                    (columns: id, url or title, plus cost and/or units_per_week)
@@ -26,8 +28,11 @@ Commands:
   confirm <match-number>...        Confirm matches by the number shown in "matches"
   reject <match-number>...         Reject matches by the number shown in "matches"
   confirm-above <confidence>       Confirm every suggested match at or above a confidence, e.g. 0.8
+  pair <your-url> <their-url>      Pair one of your products with an equivalent competitor product by hand
   brief [--days 7] [--out FILE]    Write the weekly brief
   report [--days 7] [--out FILE]   Write the weekly manager report as one HTML page
+                                   (the market report until your own store is added)
+  market [--days 7] [--out FILE]   Write the competitor market report: brands, prices by category, offers
   scorecard                        Show where each of your products stands against competitors
   prices [--out FILE]              Recommend price changes from your pricing rules (CSV with --out)
 
@@ -71,7 +76,9 @@ async function main() {
       case "add-store": {
         const url = args[0];
         if (!url) throw new Error("Give the store's URL, e.g. undercut add-store https://example.com");
-        const origin = new URL(url.startsWith("http") ? url : `https://${url}`).origin;
+        // Keep a regional path such as /ie: it decides which prices, currency and sitemap we read.
+        const parsed = new URL(url.startsWith("http") ? url : `https://${url}`);
+        const origin = `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
         const kind: Store["kind"] = values.merchant ? "merchant" : "competitor";
         if (kind === "merchant") {
           const existing = await repo.listStores("merchant");
@@ -79,7 +86,9 @@ async function main() {
             throw new Error(`Your store is already set to ${existing[0]!.url}. This version supports one merchant store.`);
           }
         }
-        const store: Store = { id: storeIdFromUrl(origin), name: values.name ?? new URL(origin).host.replace(/^www\./, ""), url: origin, kind };
+        // A name can also follow the URL, for shells (PowerShell's npm shim) that swallow --name.
+        const name = values.name ?? (args.slice(1).join(" ") || new URL(origin).host.replace(/^www\./, ""));
+        const store: Store = { id: storeIdFromUrl(origin), name, url: origin, kind };
         await repo.upsertStore(store);
         console.log(`Added ${kind === "merchant" ? "your store" : "competitor"} ${store.name} (${store.id})`);
         break;
@@ -107,9 +116,10 @@ async function main() {
       case "run": {
         const runStartedAt = new Date();
         const fetcher = politeFetcher();
+        const renderer = config.collect.renderJavaScript === "auto" ? await browserRenderer() : null;
         for (const store of await repo.listStores()) {
           try {
-            const { observation, events } = await checkStore(repo, fetcher, store);
+            const { observation, events } = await checkStore(repo, fetcher, store, { renderer });
             console.log(
               `${store.name}: ${observation.products.length} products via ${observation.source}, ` +
                 `${observation.promotions.length} promotions, ${events.length} changes`,
@@ -118,6 +128,7 @@ async function main() {
             console.error(`${store.name}: ${(err as Error).message}`);
           }
         }
+        await renderer?.close();
         const suggested = await refreshMatches(repo);
         console.log(`Product matches suggested or refreshed: ${suggested}`);
         if (config.alerts.webhookUrl && (await repo.listStores("merchant")).length > 0) {
@@ -161,6 +172,16 @@ async function main() {
         break;
       }
 
+      case "pair": {
+        const [yourUrl, theirUrl] = args;
+        if (!yourUrl || !theirUrl) throw new Error("Give your product's URL, then the competitor product's URL.");
+        const renderer = config.collect.renderJavaScript === "auto" ? await browserRenderer() : null;
+        const { yours, theirs, competitor } = await pairProducts(repo, politeFetcher(), yourUrl, theirUrl, renderer).finally(() => renderer?.close());
+        const money = (c: number) => formatCents(c, yours.currency);
+        console.log(`Paired ${yours.title} (${money(yours.priceCents)}) with ${competitor.name}'s ${theirs.title} (${money(theirs.priceCents)}).`);
+        break;
+      }
+
       case "confirm-above": {
         const min = Number(args[0]);
         if (!(min > 0 && min <= 1)) throw new Error("Give a confidence between 0 and 1, e.g. 0.8");
@@ -181,9 +202,23 @@ async function main() {
         break;
       }
 
+      case "market": {
+        const out = values.out ?? args[0] ?? "undercut-market.html";
+        const [merchant] = await repo.listStores("merchant");
+        await writeFile(out, renderMarketReport(await buildMarketView(repo, since), { since, title: merchant ? `${merchant.name} against the market` : undefined }));
+        console.log(`Wrote the market report to ${out}. Open it in a browser, or attach it to an email.`);
+        break;
+      }
+
       case "report": {
+        if ((await repo.listStores("merchant")).length === 0) {
+          const out = values.out ?? args[0] ?? "undercut-market.html";
+          await writeFile(out, renderMarketReport(await buildMarketView(repo, since), { since }));
+          console.log(`No store of your own yet, so wrote the competitor market report to ${out}.`);
+          break;
+        }
         const insights = await buildInsights(repo, config, since);
-        const out = values.out ?? "undercut-report.html";
+        const out = values.out ?? args[0] ?? "undercut-report.html";
         await writeFile(out, renderReport(insights, config, { weekOf: since }));
         console.log(`Wrote the report to ${out}. Open it in a browser, or attach it to an email.`);
         break;

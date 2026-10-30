@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { collectStore } from "../src/collectors/index.js";
 import { detectPromotions } from "../src/collectors/promotions.js";
 import { collectShopifyFeed } from "../src/collectors/shopify.js";
-import { discoverProductUrls, extractStructuredProduct } from "../src/collectors/structured.js";
+import { discoverProductUrls, extractStructuredProduct, stripSiteName, tidyTitle } from "../src/collectors/structured.js";
 import { fakeFetcher, shopifyFeed } from "./helpers.js";
 
 const ORIGIN = "https://ridgeway.example";
@@ -45,6 +45,17 @@ describe("Shopify feed", () => {
     const products = await collectShopifyFeed(fetcher, ORIGIN);
     expect(products).toHaveLength(251);
     expect(fetcher.calls).toHaveLength(2);
+  });
+
+  it("skips free variants", async () => {
+    const feed = JSON.stringify({
+      products: [
+        { id: 1, title: "Gift Box", handle: "gift-box", variants: [{ price: "0.00", available: true }] },
+        { id: 2, title: "Lip Kit", handle: "lip-kit", variants: [{ price: "0.00" }, { price: "32.00" }] },
+      ],
+    });
+    const fetcher = fakeFetcher({ [`${ORIGIN}/products.json?limit=250&page=1`]: feed });
+    expect(await collectShopifyFeed(fetcher, ORIGIN)).toEqual([expect.objectContaining({ externalId: "2", priceCents: 3200 })]);
   });
 
   it("returns null for stores that are not on Shopify", async () => {
@@ -90,6 +101,63 @@ describe("structured product data", () => {
     expect(extractStructuredProduct(html, "https://x.example/")).toBeNull();
   });
 
+  it("reads the page's own product from Next.js data, not the recommendations", () => {
+    const data = {
+      props: { pageProps: { product: { slug: "airbrush-flawless-foundation", sku: "FF-1", title: "Airbrush Flawless Foundation",
+        price: { purchasePrice: { value: 44 }, listingPrice: { value: 49 } }, availability: "IN_STOCK" },
+        related: [{ slug: "magic-cream", title: "Magic Cream", price: { purchasePrice: { value: 85 } } }] } },
+    };
+    const html = `<html><head><meta property="og:title" content="Airbrush Flawless Foundation | Charlotte Tilbury"></head><body>
+      <script id="__NEXT_DATA__" type="application/json">${JSON.stringify(data)}</script></body></html>`;
+    expect(extractStructuredProduct(html, "https://ct.example/ie/product/airbrush-flawless-foundation")).toEqual(
+      expect.objectContaining({ externalId: "FF-1", title: "Airbrush Flawless Foundation", priceCents: 4400, compareAtCents: 4900, available: true }),
+    );
+  });
+
+  it("reads a visible price, ignoring upsell boxes and was-prices outside it", () => {
+    const html = `<html><head><meta property="og:title" content="Sculpt Stick | Brand"></head><body>
+      <h1>Sculpt Stick</h1>
+      <div class="product-price"><span>€28.00</span></div>
+      <div class="price-rrp">€35.00</div>
+      <div class="BundleUpsell"><span class="price">€60.00</span><del class="price">€80.00</del></div>
+      </body></html>`;
+    const product = extractStructuredProduct(html, "https://brand.example/ie/sculpt-stick");
+    expect(product).toEqual(expect.objectContaining({ title: "Sculpt Stick", priceCents: 2800, currency: "EUR" }));
+    expect(product?.compareAtCents).toBeUndefined();
+  });
+
+  it("takes a was-price only from inside the chosen price", () => {
+    const html = `<html><body><h1>Brow Gel</h1><div class="price"><del>€20.00</del> <ins>€15.00</ins></div></body></html>`;
+    expect(extractStructuredProduct(html, "https://brand.example/brow-gel")).toEqual(
+      expect.objectContaining({ priceCents: 1500, compareAtCents: 2000 }),
+    );
+  });
+
+  it("tidies ALL CAPS titles and adds the shade from Next.js data", () => {
+    const data = { props: { pageProps: { product: { slug: "airbrush-brightening-flawless-finish-tan-deep", sku: "AB-TD",
+      title: "AIRBRUSH BRIGHTENING FLAWLESS FINISH", subtitle: "TAN - DEEP", swatchVariant: "SHADE", shade: "", category: "Makeup/Face/Powder", price: { purchasePrice: { value: 54 } } } } } };
+    const html = `<html><body><script id="__NEXT_DATA__" type="application/json">${JSON.stringify(data)}</script></body></html>`;
+    expect(extractStructuredProduct(html, "https://ct.example/ie/product/airbrush-brightening-flawless-finish-tan-deep")?.title).toBe(
+      "Airbrush Brightening Flawless Finish – Tan-Deep",
+    );
+    expect(extractStructuredProduct(html, "https://ct.example/ie/product/airbrush-brightening-flawless-finish-tan-deep")?.productType).toBe("Powder");
+    const refill = { props: { pageProps: { product: { slug: "flawless-foundation-refill", title: "FLAWLESS FOUNDATION REFILL",
+      subtitle: "FAIR - MEDIUM REFILL", swatchVariant: "SHADE", price: { purchasePrice: { value: 46 } } } } } };
+    expect(
+      extractStructuredProduct(`<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(refill)}</script>`, "https://ct.example/ie/product/flawless-foundation-refill")?.title,
+    ).toBe("Flawless Foundation Refill – Fair-Medium");
+    const kit = { props: { pageProps: { product: { slug: "glow-kit", title: "GLOW KIT", subtitle: "MAGICAL SAVINGS", swatchVariant: "NONE", price: { purchasePrice: { value: 80 } } } } } };
+    expect(extractStructuredProduct(`<script id="__NEXT_DATA__" type="application/json">${JSON.stringify(kit)}</script>`, "https://ct.example/ie/product/glow-kit")?.title).toBe("Glow Kit");
+    expect(tidyTitle("PILLOW TALK LIP KIT WITH SPF 15")).toBe("Pillow Talk Lip Kit with SPF 15");
+    expect(tidyTitle("Magic Cream")).toBe("Magic Cream");
+  });
+
+  it("strips the site name from titles", () => {
+    expect(stripSiteName("Pillow Talk Lipstick | Charlotte Tilbury")).toBe("Pillow Talk Lipstick");
+    expect(stripSiteName("Contour Kit - Sculpted by Aimee", "Sculpted by Aimee")).toBe("Contour Kit");
+    expect(stripSiteName("Glow-Up Duo")).toBe("Glow-Up Duo");
+  });
+
   it("finds product URLs through a sitemap index", async () => {
     const fetcher = fakeFetcher({
       "https://kettle.example/sitemap.xml": `<?xml version="1.0"?><sitemapindex>
@@ -118,6 +186,12 @@ describe("promotions", () => {
     expect(promos.find((p) => p.kind === "free_shipping")?.thresholdCents).toBe(5000);
   });
 
+  it("ignores menu links that mention sales", () => {
+    const html = `<html><body><nav class="megamenu"><a>Black Friday</a><a>20% off gifts</a></nav>
+      <main><p>New season shades</p></main></body></html>`;
+    expect(detectPromotions(html)).toEqual([]);
+  });
+
   it("finds nothing on a page without offers", () => {
     expect(detectPromotions("<html><body><header>Welcome to our shop</header></body></html>")).toEqual([]);
   });
@@ -135,5 +209,14 @@ describe("collectStore", () => {
     expect(obs.source).toBe("structured_data");
     expect(obs.products.map((p) => p.title)).toEqual(["Decaf 250g"]);
     expect(obs.promotions.map((p) => p.key).sort()).toEqual(["percent_off:10", "sale_banner:flash sale"]);
+  });
+
+  it("takes a Shopify store's currency from its homepage", async () => {
+    const fetcher = fakeFetcher({
+      [`${ORIGIN}/products.json?limit=250&page=1`]: shopifyFeed([{ id: 1, title: "Contour Kit", price: "30.00" }]),
+      [`${ORIGIN}/`]: `<script>Shopify.currency = {"active":"EUR","rate":"1.0"};</script>`,
+    });
+    const obs = await collectStore(fetcher, { id: "sba", name: "SbA", url: ORIGIN, kind: "competitor" });
+    expect(obs.products[0]?.currency).toBe("EUR");
   });
 });

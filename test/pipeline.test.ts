@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type Anthropic from "@anthropic-ai/sdk";
 import { collapse, rankEvents } from "../src/brief/rank.js";
 import { renderPlainBrief, writeBrief } from "../src/brief/write.js";
-import { buildBrief, checkStore, refreshMatches } from "../src/pipeline.js";
+import { buildBrief, checkStore, pairProducts, refreshMatches, sameProductUrl } from "../src/pipeline.js";
 import { DEFAULT_CONFIG } from "../src/config.js";
 import { renderReport } from "../src/report/html.js";
 import { MemoryRepository } from "../src/store/memory.js";
@@ -65,7 +65,7 @@ describe("end to end", () => {
     expect(html).toContain("$280.00");
     expect(html).toContain("Prices to change this week");
     expect(html).toContain('<span class="pill neutral">Hold</span>');
-    expect(html).toContain("saves $35.96");
+    expect(html).toContain("saves $35.56");
     expect(html).toContain("Rivals out of stock");
   });
 });
@@ -150,5 +150,46 @@ describe("brief writer", () => {
     const { client } = fakeClient({ stop_reason: "refusal", content: [] });
     const out = await writeBrief(items, ctx, client);
     expect(out).toEqual({ markdown: renderPlainBrief(items, ctx), writer: "template" });
+  });
+});
+
+describe("pairing products by hand", () => {
+  it("pairs equivalent products, reading the competitor page if needed, and tracks it on later runs", async () => {
+    const repo = new MemoryRepository();
+    const mine: Store = { id: "glow", name: "Glow Cosmetics", url: "https://glow.example", kind: "merchant" };
+    const ct: Store = { id: "ct", name: "Charlotte's", url: "https://www.ct.example", kind: "competitor" };
+    await repo.upsertStore(mine);
+    await repo.upsertStore(ct);
+    const pageUrl = "https://www.ct.example/us/product/contour-wand";
+    const page = `<script type="application/ld+json">{"@type":"Product","name":"Contour Wand","sku":"CW-1","offers":{"price":"38.00"}}</script>`;
+    const fetcher = fakeFetcher({
+      [feedUrl(mine)]: shopifyFeed([{ id: 7, title: "Sculpt Stick", price: "28.00" }]),
+      [pageUrl]: page,
+      [`${ct.url}/`]: "<header>Hi</header>",
+    });
+    await checkStore(repo, fetcher, mine);
+
+    const { yours, theirs } = await pairProducts(repo, fetcher, "https://glow.example/products/sculpt-stick?variant=1", pageUrl);
+    expect(yours.title).toBe("Sculpt Stick");
+    expect(theirs).toEqual(expect.objectContaining({ externalId: "CW-1", priceCents: 3800 }));
+    expect(await repo.listMatches("confirmed")).toEqual([
+      expect.objectContaining({ merchantExternalId: "7", competitorStoreId: "ct", competitorExternalId: "CW-1", confidence: 1 }),
+    ]);
+
+    // The competitor has no Shopify feed or sitemap, so only the tracked page keeps the pair priced.
+    const { observation } = await checkStore(repo, fetcher, ct);
+    expect(observation.products.map((p) => p.externalId)).toEqual(["CW-1"]);
+  });
+
+  it("explains what's missing", async () => {
+    const repo = new MemoryRepository();
+    await expect(pairProducts(repo, fakeFetcher({}), "https://a.example/p", "https://b.example/p")).rejects.toThrow("Add your store first");
+  });
+});
+
+describe("sameProductUrl", () => {
+  it("ignores query, fragment, trailing slash and www", () => {
+    expect(sameProductUrl("https://www.x.example/products/a/?v=1#top", "https://x.example/products/a")).toBe(true);
+    expect(sameProductUrl("https://x.example/products/a", "https://x.example/products/b")).toBe(false);
   });
 });

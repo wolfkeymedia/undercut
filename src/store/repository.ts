@@ -23,6 +23,10 @@ export interface Repository {
     status: ProductMatch["status"],
   ): Promise<void>;
 
+  /** Product pages to check on every run, on top of what the store's feed or sitemap lists. */
+  addTrackedUrl(storeId: string, url: string): Promise<void>;
+  trackedUrls(storeId: string): Promise<string[]>;
+
   close(): Promise<void>;
 }
 

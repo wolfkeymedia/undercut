@@ -213,6 +213,15 @@ export class PostgresRepository implements Repository {
     );
   }
 
+  async addTrackedUrl(storeId: string, url: string) {
+    await this.pool.query("INSERT INTO tracked_urls (store_id, url) VALUES ($1, $2) ON CONFLICT DO NOTHING", [storeId, url]);
+  }
+
+  async trackedUrls(storeId: string) {
+    const { rows } = await this.pool.query<{ url: string }>("SELECT url FROM tracked_urls WHERE store_id = $1 ORDER BY created_at", [storeId]);
+    return rows.map((r) => r.url);
+  }
+
   async close() {
     await this.pool.end();
   }
