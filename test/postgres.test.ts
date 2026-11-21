@@ -55,6 +55,12 @@ describe.skipIf(!url)("PostgresRepository", () => {
     expect(await repo.listMatches()).toEqual([expect.objectContaining({ status: "rejected", confidence: expect.closeTo(0.7, 5) })]);
   });
 
+  it("keeps tracked product pages once each", async () => {
+    await repo.addTrackedUrl("them", "https://them.example/p/1");
+    await repo.addTrackedUrl("them", "https://them.example/p/1");
+    expect(await repo.trackedUrls("them")).toEqual(["https://them.example/p/1"]);
+  });
+
   it("does not reapply migrations", async () => {
     expect(await migrate(repo.db)).toEqual([]);
   });

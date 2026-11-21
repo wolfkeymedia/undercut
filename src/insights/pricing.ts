@@ -58,8 +58,10 @@ export function recommendPrices(positions: ProductPosition[], rules: PricingConf
       price = floor;
       limitedBy = "margin_floor";
     }
-    price = roundPrice(price, rules.rounding, floor);
+    price = roundPrice(price, rules.rounding, floor, p.priceCents);
 
+    // Only cut when a rival is actually cheaper; being level or already under is not a reason to give up margin.
+    if (price < p.priceCents && pos.position !== "undercut") continue;
     const changePct = ((price - p.priceCents) / p.priceCents) * 100;
     if (Math.abs(changePct) < rules.minChangePercent) continue;
     // A floor above today's price is a pricing problem, not a competitive move; leave it to the merchant.
@@ -122,12 +124,14 @@ export function recommendPrices(positions: ProductPosition[], rules: PricingConf
  * overshoots the target. If that would cross the margin floor, rounds up to
  * the first .99 price at or above the floor instead.
  */
-export function roundPrice(cents: number, rounding: PricingConfig["rounding"], floor = 0): number {
+export function roundPrice(cents: number, rounding: PricingConfig["rounding"], floor = 0, currentCents?: number): number {
   const whole = Math.max(Math.round(cents), floor);
   if (rounding === "none") return whole;
-  const down = Math.floor((whole + 1) / 100) * 100 - 1;
+  // "match" keeps the store's own price ending, e.g. .95 or .00, taken from the current price.
+  const ending = rounding === "match" ? (currentCents !== undefined ? currentCents % 100 : 99) : Number(rounding);
+  const down = Math.floor((whole - ending) / 100) * 100 + ending;
   if (down >= floor && down > 0) return down;
-  return Math.ceil((floor + 1) / 100) * 100 - 1;
+  return Math.ceil((floor - ending) / 100) * 100 + ending;
 }
 
 /** Recommendations as CSV, one row per product, for review or bulk editing. */

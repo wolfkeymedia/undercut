@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import type { ChangeEvent, ProductEconomics, ProductMatch, ProductSnapshot, Promotion, Store, StoreObservation } from "../types.js";
+import { ClientRegistry } from "./clients.js";
 import type { Repository } from "./repository.js";
 
 const MIGRATIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../db/migrations");
@@ -33,11 +34,23 @@ export async function migrate(pool: pg.Pool, dir = MIGRATIONS_DIR): Promise<stri
   return applied;
 }
 
-export class PostgresRepository implements Repository {
-  constructor(private readonly pool: pg.Pool) {}
+export const DEFAULT_CLIENT = "default";
 
-  static fromUrl(connectionString: string): PostgresRepository {
-    return new PostgresRepository(new pg.Pool({ connectionString }));
+export class PostgresRepository implements Repository {
+  /** One pool can serve many clients; only the repository that created it closes it. */
+  constructor(
+    private readonly pool: pg.Pool,
+    readonly clientId: string = DEFAULT_CLIENT,
+    private readonly ownsPool = true,
+  ) {}
+
+  static fromUrl(connectionString: string, clientId = DEFAULT_CLIENT, poolOptions: pg.PoolConfig = {}): PostgresRepository {
+    return new PostgresRepository(new pg.Pool({ connectionString, ...poolOptions }), clientId);
+  }
+
+  /** The same database, seen as another client. Shares this repository's pool. */
+  forClient(clientId: string): PostgresRepository {
+    return new PostgresRepository(this.pool, clientId, false);
   }
 
   get db(): pg.Pool {
@@ -45,24 +58,42 @@ export class PostgresRepository implements Repository {
   }
 
   async upsertStore(store: Store) {
+    // The CLI works as the client "default" until clients are set up, so make sure it exists.
+    if (this.clientId === DEFAULT_CLIENT) await new ClientRegistry(this.pool).ensure(DEFAULT_CLIENT, "Default");
     await this.pool.query(
-      `INSERT INTO stores (id, name, url, kind) VALUES ($1, $2, $3, $4)
-       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, url = EXCLUDED.url, kind = EXCLUDED.kind`,
-      [store.id, store.name, store.url, store.kind],
+      `INSERT INTO stores (id, name, url) VALUES ($1, $2, $3)
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, url = EXCLUDED.url`,
+      [store.id, store.name, store.url],
+    );
+    await this.pool.query(
+      `INSERT INTO client_stores (client_id, store_id, role) VALUES ($1, $2, $3)
+       ON CONFLICT (client_id, store_id) DO UPDATE SET role = EXCLUDED.role`,
+      [this.clientId, store.id, store.kind],
     );
   }
 
   async getStore(id: string) {
-    const { rows } = await this.pool.query<Store>("SELECT id, name, url, kind FROM stores WHERE id = $1", [id]);
+    const { rows } = await this.pool.query<Store>(
+      `SELECT s.id, s.name, s.url, cs.role AS kind FROM stores s
+       JOIN client_stores cs ON cs.store_id = s.id AND cs.client_id = $1 WHERE s.id = $2`,
+      [this.clientId, id],
+    );
     return rows[0] ?? null;
   }
 
   async listStores(kind?: Store["kind"]) {
     const { rows } = await this.pool.query<Store>(
-      "SELECT id, name, url, kind FROM stores WHERE $1::text IS NULL OR kind = $1 ORDER BY created_at",
-      [kind ?? null],
+      `SELECT s.id, s.name, s.url, cs.role AS kind FROM stores s
+       JOIN client_stores cs ON cs.store_id = s.id AND cs.client_id = $1
+       WHERE $2::text IS NULL OR cs.role = $2 ORDER BY cs.role DESC, cs.created_at`,
+      [this.clientId, kind ?? null],
     );
     return rows;
+  }
+
+  async removeStore(id: string) {
+    await this.pool.query("DELETE FROM product_matches WHERE client_id = $1 AND competitor_store_id = $2", [this.clientId, id]);
+    await this.pool.query("DELETE FROM client_stores WHERE client_id = $1 AND store_id = $2", [this.clientId, id]);
   }
 
   async saveObservation(o: StoreObservation) {
@@ -157,8 +188,10 @@ export class PostgresRepository implements Repository {
 
   async listEvents(since: Date, until = new Date()) {
     const { rows } = await this.pool.query(
-      "SELECT * FROM change_events WHERE occurred_at >= $1 AND occurred_at <= $2 ORDER BY occurred_at",
-      [since, until],
+      `SELECT e.* FROM change_events e
+       JOIN client_stores cs ON cs.store_id = e.store_id AND cs.client_id = $3
+       WHERE e.occurred_at >= $1 AND e.occurred_at <= $2 ORDER BY e.occurred_at, e.id`,
+      [since, until, this.clientId],
     );
     return rows.map(
       (r): ChangeEvent => ({
@@ -180,19 +213,20 @@ export class PostgresRepository implements Repository {
     for (const m of matches) {
       // Never overwrite a decision the merchant already made.
       await this.pool.query(
-        `INSERT INTO product_matches (merchant_external_id, competitor_store_id, competitor_external_id, confidence, status)
-         VALUES ($1, $2, $3, $4, 'suggested')
-         ON CONFLICT (merchant_external_id, competitor_store_id, competitor_external_id)
+        `INSERT INTO product_matches (client_id, merchant_external_id, competitor_store_id, competitor_external_id, confidence, status)
+         VALUES ($5, $1, $2, $3, $4, 'suggested')
+         ON CONFLICT (client_id, merchant_external_id, competitor_store_id, competitor_external_id)
          DO UPDATE SET confidence = EXCLUDED.confidence, updated_at = now() WHERE product_matches.status = 'suggested'`,
-        [m.merchantExternalId, m.competitorStoreId, m.competitorExternalId, m.confidence],
+        [m.merchantExternalId, m.competitorStoreId, m.competitorExternalId, m.confidence, this.clientId],
       );
     }
   }
 
   async listMatches(status?: ProductMatch["status"]) {
     const { rows } = await this.pool.query(
-      "SELECT * FROM product_matches WHERE $1::text IS NULL OR status = $1 ORDER BY confidence DESC",
-      [status ?? null],
+      `SELECT * FROM product_matches WHERE client_id = $2 AND ($1::text IS NULL OR status = $1)
+       ORDER BY confidence DESC, merchant_external_id, competitor_store_id, competitor_external_id`,
+      [status ?? null, this.clientId],
     );
     return rows.map(
       (r): ProductMatch => ({
@@ -208,13 +242,31 @@ export class PostgresRepository implements Repository {
   async setMatchStatus(key: Parameters<Repository["setMatchStatus"]>[0], status: ProductMatch["status"]) {
     await this.pool.query(
       `UPDATE product_matches SET status = $4, updated_at = now()
-       WHERE merchant_external_id = $1 AND competitor_store_id = $2 AND competitor_external_id = $3`,
-      [key.merchantExternalId, key.competitorStoreId, key.competitorExternalId, status],
+       WHERE client_id = $5 AND merchant_external_id = $1 AND competitor_store_id = $2 AND competitor_external_id = $3`,
+      [key.merchantExternalId, key.competitorStoreId, key.competitorExternalId, status, this.clientId],
     );
   }
 
+  async addTrackedUrl(storeId: string, url: string) {
+    await this.pool.query("INSERT INTO tracked_urls (store_id, url) VALUES ($1, $2) ON CONFLICT DO NOTHING", [storeId, url]);
+  }
+
+  async trackedUrls(storeId: string) {
+    const { rows } = await this.pool.query<{ url: string }>("SELECT url FROM tracked_urls WHERE store_id = $1 ORDER BY created_at", [storeId]);
+    return rows.map((r) => r.url);
+  }
+
+  async crawlCursor(storeId: string) {
+    const { rows } = await this.pool.query<{ crawl_cursor: number }>("SELECT crawl_cursor FROM stores WHERE id = $1", [storeId]);
+    return rows[0]?.crawl_cursor ?? 0;
+  }
+
+  async setCrawlCursor(storeId: string, cursor: number) {
+    await this.pool.query("UPDATE stores SET crawl_cursor = $2 WHERE id = $1", [storeId, cursor]);
+  }
+
   async close() {
-    await this.pool.end();
+    if (this.ownsPool) await this.pool.end();
   }
 }
 

@@ -54,6 +54,11 @@ export interface StoreObservation {
   promotions: Promotion[];
   /** How the products were collected, for debugging extraction quality. */
   source: "shopify_feed" | "structured_data" | "mixed";
+  /**
+   * Set when only some product pages were read (the run hit its time limit).
+   * Not stored: checkStore carries the unread products over from the last check.
+   */
+  partial?: { attemptedUrls: string[]; nextCursor: number };
 }
 
 export type EventKind =

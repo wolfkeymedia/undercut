@@ -56,6 +56,17 @@ export async function collectShopifyFeed(
   return products;
 }
 
+/**
+ * The feed has no currency, but every Shopify storefront page declares the
+ * active one in a script (`Shopify.currency = {"active":"EUR",...}`).
+ */
+export function shopifyCurrency(html: string): string | undefined {
+  const m =
+    /Shopify\.currency\s*=\s*\{[^}]*"active"\s*:\s*"([A-Z]{3})"/.exec(html) ??
+    /<meta[^>]+property=["']og:price:currency["'][^>]+content=["']([A-Z]{3})["']/i.exec(html);
+  return m?.[1];
+}
+
 function parseFeed(body: string): ShopifyFeed | null {
   try {
     const json = JSON.parse(body) as unknown;
@@ -71,7 +82,8 @@ function parseFeed(body: string): ShopifyFeed | null {
 export function toSnapshot(origin: string, p: ShopifyProduct): ProductSnapshot | null {
   const variants = p.variants
     .map((v) => ({ price: toCents(v.price), compareAt: toCents(v.compare_at_price), available: v.available ?? true }))
-    .filter((v): v is { price: number; compareAt: number | undefined; available: boolean } => v.price !== undefined);
+    // Zero-price variants are free gifts, samples or packaging add-ons, not products anyone competes on.
+    .filter((v): v is { price: number; compareAt: number | undefined; available: boolean } => v.price !== undefined && v.price > 0);
   if (variants.length === 0) return null;
 
   const available = variants.filter((v) => v.available);
