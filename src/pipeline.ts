@@ -11,6 +11,7 @@ import { buildMarket } from "./insights/market.js";
 import { buildScorecard } from "./insights/position.js";
 import { recommendPrices } from "./insights/pricing.js";
 import { describePattern, promoPatterns } from "./insights/promos.js";
+import { priceGapAlerts, trackPromos, weeklyPriceMoves } from "./insights/reports.js";
 import { formatCents } from "./money.js";
 import type { ChangeEvent, ProductSnapshot, Promotion, Store, StoreObservation } from "./types.js";
 
@@ -93,8 +94,13 @@ export async function buildInsights(repo: Repository, config: Config, since: Dat
   // Promo rhythm needs months of history, not just this week.
   const history = (await repo.listEvents(new Date(until.getTime() - 180 * DAY), until)).filter((e) => competitorIds.has(e.storeId));
   const patterns = promoPatterns(history, competitors);
+  const currentPromos = new Map<string, Promotion[]>();
+  for (const c of competitors) currentPromos.set(c.id, (await repo.latestObservation(c.id))?.promotions ?? []);
+  const promoTracker = trackPromos({ events: history, stores: competitors, current: currentPromos, now: until });
 
   const money = (c: number) => formatCents(c, currency);
+  const gaps = priceGapAlerts(scorecard.positions);
+  const priceMoves = weeklyPriceMoves(items, money);
   const headline: string[] = [];
   const t = scorecard.totals;
   if (t.revenueAtRiskCents > 0) {
@@ -147,7 +153,7 @@ export async function buildInsights(repo: Repository, config: Config, since: Dat
         : `${r.title}: ${money(r.currentCents)} to ${money(r.recommendedCents)}. ${r.reason}`,
     );
 
-  return { merchant, competitors, merchantProducts, currency, items, scorecard, recommendations, patterns, headline, priceActions };
+  return { merchant, competitors, merchantProducts, currency, items, scorecard, recommendations, patterns, headline, priceActions, gaps, promoTracker, priceMoves };
 }
 
 export type Insights = Awaited<ReturnType<typeof buildInsights>>;
