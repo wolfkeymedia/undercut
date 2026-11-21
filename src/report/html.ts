@@ -2,6 +2,7 @@ import { describeItem } from "../brief/write.js";
 import type { Config } from "../config.js";
 import type { ProductPosition } from "../insights/position.js";
 import { describePattern } from "../insights/promos.js";
+import type { PriceGapAlert, TrackedPromo } from "../insights/reports.js";
 import { formatCents } from "../money.js";
 import type { Insights } from "../pipeline.js";
 
@@ -32,6 +33,8 @@ const POSITION_LABEL: Record<ProductPosition["position"], string> = {
  */
 export function renderReport(insights: Insights, config: Config, options: { weekOf: Date; generatedAt?: Date; sample?: boolean }): string {
   const money = (c: number) => formatCents(c, insights.currency);
+  // The currency sign on its own, for headings: "€", "$", or the code when there is no sign.
+  const cur = money(0).replace(/[\d.,\s]/g, "") || (insights.currency ?? "");
   const t = insights.scorecard.totals;
   const raises = insights.recommendations.filter((r) => r.action === "raise");
   const headroom = raises.reduce((s, r) => s + (r.weeklyMarginImpactCents ?? 0), 0);
@@ -118,6 +121,54 @@ export function renderReport(insights: Insights, config: Config, options: { week
     .map((s) => `<li>${esc(s)}</li>`)
     .join("");
 
+  const moveRows = insights.priceMoves
+    .map((m) => {
+      const pct = `${m.changePercent > 0 ? "+" : ""}${m.changePercent.toFixed(1)}%`;
+      const value = m.valueCents !== undefined ? `<span class="bad-t">${money(m.valueCents)}</span><div class="sub">sales at risk / wk</div>` : `<span class="sub">No ${cur} figure</span><div class="sub">${esc(m.noValueReason ?? "")}</div>`;
+      return `<tr>
+        <td>${m.url ? `<a href="${esc(m.url)}">${esc(m.title)}</a>` : esc(m.title)}<div class="sub">${esc(m.competitor)} · ${esc(m.reason)}</div></td>
+        <td class="num">${money(m.beforeCents)} → <b>${money(m.afterCents)}</b><div class="sub"><span class="pill ${m.direction === "down" ? "bad" : "good"}">${m.direction === "down" ? "▼" : "▲"} ${money(Math.abs(m.changeCents))} · ${pct}</span></div></td>
+        <td class="num value">${value}</td>
+      </tr>`;
+    })
+    .join("");
+
+  const gapRows = (list: PriceGapAlert[]) =>
+    list
+      .slice(0, 25)
+      .map(
+        (g) => `<tr>
+        <td><a href="${esc(g.url)}">${esc(g.title)}</a><div class="sub">${g.rivalsCompared} ${g.rivalsCompared === 1 ? "rival" : "rivals"} in stock</div></td>
+        <td class="num">${money(g.yourPriceCents)}</td>
+        <td>${esc(g.rivalName)} <span class="num">${money(g.rivalPriceCents)}</span></td>
+        <td class="num strong bad-t">+${money(g.gapCents)}</td>
+        <td class="num"><span class="pill bad">+${g.gapPercent.toFixed(1)}%</span></td>
+      </tr>`,
+      )
+      .join("");
+  const gapTable = (rows: string, against: string) =>
+    `<div class="scroll"><table class="wide"><thead><tr><th>Your product</th><th class="num">Your price</th><th>${against}</th><th class="num">Gap (${cur})</th><th class="num">Gap (%)</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const cheaperRows = gapRows(insights.gaps.cheaperRivals);
+  const aboveRows = gapRows(insights.gaps.pricedAbove);
+
+  const day = (d: Date) => d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+  const promoRows = insights.promoTracker
+    .slice(0, 30)
+    .map((p: TrackedPromo) => {
+      const offer = [p.percentOff ? `${p.percentOff}% off` : "", p.code ? `code ${p.code}` : ""].filter(Boolean).join(" · ");
+      const started = p.startedAt ? day(p.startedAt) : `<span class="sub">Before we started watching</span>`;
+      const ended = p.running ? `<span class="pill bad">Running</span>` : p.endedAt ? day(p.endedAt) : `<span class="sub">Over, date not recorded</span>`;
+      const length = p.days !== undefined ? `${p.days} ${p.days === 1 ? "day" : "days"}${p.running ? " so far" : ""}` : "—";
+      return `<tr>
+        <td><b>${esc(p.storeName)}</b><div>${esc(p.text)}</div>${offer ? `<div class="sub">${esc(offer)}</div>` : ""}</td>
+        <td class="num">${started}</td>
+        <td class="num">${ended}</td>
+        <td class="num">${length}</td>
+        <td><span class="sub">${esc(p.advice)}</span></td>
+      </tr>`;
+    })
+    .join("");
+
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -136,6 +187,16 @@ ${REPORT_CSS}</style>
 
   <div class="tiles">${tiles}</div>
 
+  <section id="brief">
+    <h2>This week's brief</h2>
+    <p class="explain">The biggest price moves your competitors made this week, most important first. A ${cur} figure is shown only where we can work it out from your data: it is the weekly sales a cheaper rival puts at risk, and needs the product paired and your weekly sales. Where we can't, you still see the move and why there is no figure.</p>
+    ${
+      moveRows
+        ? `<div class="scroll"><table class="wide"><thead><tr><th>Product and why it matters</th><th class="num">Price move</th><th class="num">${cur} at stake</th></tr></thead><tbody>${moveRows}</tbody></table></div>`
+        : `<p class="empty">No competitor changed a price this week.</p>`
+    }
+  </section>
+
   <section>
     <h2>Prices to change this week</h2>
     ${
@@ -143,6 +204,17 @@ ${REPORT_CSS}</style>
         ? `<div class="scroll"><table class="wide"><thead><tr><th>Product</th><th class="num">Now</th><th class="num">Recommended</th><th class="num">Margin</th><th class="num">Margin / week</th></tr></thead><tbody>${actions}</tbody></table></div>`
         : `<p class="empty">No price changes recommended. Your prices sit where your rules want them.</p>`
     }
+  </section>
+
+  <section id="gaps">
+    <h2>Price gap alerts</h2>
+    <p class="explain">Products where you cost more than the competition, using only products you have paired and rivals that have them in stock. The gap is how much more you charge, in euros and as a percent of their price. A small gap is often fine if your brand, shipping or service is stronger; a large one is where shoppers are most likely to go elsewhere.</p>
+    <h3>Priced well above the market</h3>
+    <p class="sub">You are at least ${insights.gaps.abovePercent}% above the average price of every rival in stock. These are the first to review.</p>
+    ${aboveRows ? gapTable(aboveRows, "Rival average") : `<p class="empty">None. No paired product is ${insights.gaps.abovePercent}% or more above the market average.</p>`}
+    <h3>A rival is cheaper</h3>
+    <p class="sub">At least one rival in stock sells it for less than you, but you are within ${insights.gaps.abovePercent}% of the market average.</p>
+    ${cheaperRows ? gapTable(cheaperRows, "Cheapest rival") : `<p class="empty">None. No rival in stock is cheaper than you on a paired product.</p>`}
   </section>
 
   <div class="two">
@@ -156,6 +228,16 @@ ${REPORT_CSS}</style>
       ${promos ? `<ul class="plain">${promos}</ul>` : `<p class="empty">Not enough promotion history yet. Forecasts appear once a competitor has run two campaigns.</p>`}
     </section>
   </div>
+
+  <section id="promos">
+    <h2>Promo tracker</h2>
+    <p class="explain">Every sale, discount code and free-shipping offer we have seen on your competitors' sites in the last six months, with the day it started and ended. Dates are the first check that saw it start or stop, so they can be a day out. Use it to decide whether to match an offer or let it pass; most sales end within a week or two.</p>
+    ${
+      promoRows
+        ? `<div class="scroll"><table class="wide"><thead><tr><th>Competitor and offer</th><th class="num">Started</th><th class="num">Ended</th><th class="num">Length</th><th>Match or skip?</th></tr></thead><tbody>${promoRows}</tbody></table></div>`
+        : `<p class="empty">No competitor promotions seen yet. Offers appear here as soon as one shows on a competitor's homepage.</p>`
+    }
+  </section>
 
   <section>
     <h2>What changed</h2>
@@ -263,6 +345,11 @@ tr:last-child td { border-bottom: 0; }
 td.num, th.num { text-align: right; }
 .strong { font-weight: 700; }
 .good-t { color: var(--good); font-weight: 600; }
+.bad-t { color: var(--bad); font-weight: 600; }
+h3 { margin: 18px 0 4px; font-size: 0.98rem; }
+.explain { margin: -6px 0 14px; color: var(--muted); font-size: 0.9rem; max-width: 70ch; }
+td.value { min-width: 150px; white-space: normal; }
+td.value .sub { max-width: 220px; margin-left: auto; }
 .sub { color: var(--muted); font-size: 0.85rem; margin: 2px 0 0; }
 .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; white-space: nowrap; }
 ul.changes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
