@@ -146,4 +146,29 @@ describe.skipIf(!baseUrl)("hosted app", () => {
     expect(page).toContain("connected");
     expect(page).not.toContain("shpat_x");
   });
+
+  it("guides a new client through the add-a-client steps", async () => {
+    expect(await (await get("/clients/new")).text()).toContain("Who are their competitors?");
+    expect(await (await get("/help")).text()).toContain("What is a product pair?");
+
+    // A mistake shows the form again with what was typed.
+    const bad = await post("/clients", { name: "Third Brand", competitor: "nodot", strategy: "beat" });
+    expect(bad.status).toBe(400);
+    const badPage = await bad.text();
+    expect(badPage).toContain("nodot is not a store address");
+    expect(badPage).toContain('value="Third Brand"');
+
+    const body = new URLSearchParams({ name: "Third Brand", store: "mine.example", strategy: "match", minMarginPercent: "40", autoConfirm: "1" });
+    body.append("competitor", "https://them.example");
+    body.append("competitor", "them.example/");
+    const res = await fetch(`${origin}/clients`, { method: "POST", body, headers: { cookie: adminCookie }, redirect: "manual" });
+    expect(res.headers.get("location")).toMatch(/^\/clients\/third-brand\?ok=/);
+    await settle();
+    const page = await (await get("/clients/third-brand")).text();
+    expect(page).toContain("Auto-pairing on");
+    expect(page).toContain("1 confirmed pair");
+    expect(page).toContain('<option value="match" selected>');
+    expect(page.match(/them\.example<\/a>/g)).toHaveLength(1); // the duplicate was dropped
+    expect(await (await get("/")).text()).toContain("Third Brand");
+  });
 });

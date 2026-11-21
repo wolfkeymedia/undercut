@@ -20,6 +20,8 @@ export type ClientSettings = {
   alerts?: Partial<Config["alerts"]>;
   priceSensitivity?: number;
   maxShareAtRisk?: number;
+  /** Suggested pairs at or above this match score are confirmed automatically after each check. */
+  autoConfirmAbove?: number;
 };
 
 /** A store to collect, with every client that watches it. */
