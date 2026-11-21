@@ -39,13 +39,25 @@ export async function checkOneStore(
       renderer: null,
     });
     await registry.recordCheck(storeId);
-    for (const clientId of target.clientIds) await refreshMatches(root.forClient(clientId));
+    for (const clientId of target.clientIds) {
+      const clientRepo = root.forClient(clientId);
+      await refreshMatches(clientRepo);
+      await autoConfirm(clientRepo, (await registry.get(clientId))?.settings.autoConfirmAbove);
+    }
     return { storeId, complete, products: observation.products.length, changes: events.length };
   } catch (err) {
     const message = (err as Error).message;
     await registry.recordCheck(storeId, message);
     return { storeId, complete: true, products: 0, changes: 0, error: message };
   }
+}
+
+/** Confirms suggested pairs at or above the client's auto-pairing score, if they turned it on. */
+export async function autoConfirm(repo: PostgresRepository, min?: number): Promise<number> {
+  if (!min || !(min >= 0.5 && min <= 1)) return 0;
+  const strong = (await repo.listMatches("suggested")).filter((m) => m.confidence >= min);
+  for (const m of strong) await repo.setMatchStatus(m, "confirmed");
+  return strong.length;
 }
 
 /** Pulls costs and recent sales from a client's Shopify install into its own store's products. */
@@ -78,6 +90,7 @@ export async function finishClient(
   }
   try {
     await refreshMatches(repo);
+    await autoConfirm(repo, client.settings.autoConfirmAbove);
     const config = withClientSettings(DEFAULT_CONFIG, client.settings);
     if (config.alerts.webhookUrl && (await repo.listStores("merchant")).length > 0) {
       const insights = await buildInsights(repo, config, since);

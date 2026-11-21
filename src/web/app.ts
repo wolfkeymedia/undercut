@@ -16,7 +16,8 @@ import type { ProductMatch, Store } from "../types.js";
 import { checkOneStore, finishClient, syncShopify } from "./jobs.js";
 import { cookie, html, HttpError, json, redirect, send, text, toRequest, type Reply, type Request } from "./http.js";
 import { randomToken, safeEqual, Secrets } from "./secrets.js";
-import { clientPage, dashboardPage, loginPage, notFoundPage, setupPage, waitingPage, type ClientRow } from "./views.js";
+import { clientPage, dashboardPage, helpPage, loginPage, newClientPage, notFoundPage, setupPage, sidebarClients, waitingPage, type ClientRow, type WizardValues } from "./views.js";
+import { reportNav } from "./report-nav.js";
 
 /**
  * The hosted app: admin pages to set up clients, a private report link per client,
@@ -42,6 +43,8 @@ const MAX_ROUNDS = 6;
 const ADMIN_COOKIE = "uc_admin";
 const STATE_COOKIE = "uc_shopify_state";
 const DAY = 86_400_000;
+/** Match score from which "pair very close matches for me" confirms a pair. */
+const AUTO_CONFIRM_AT = 0.95;
 
 interface Context {
   env: AppEnv;
@@ -145,6 +148,8 @@ async function route(req: Request, rawEnv: AppEnv, overrides: Overrides): Promis
   const flash = { notice: req.query.get("ok"), error: req.query.get("error") };
   if (p === "/" && req.method === "GET") return dashboard(ctx, req, flash);
   if (p === "/clients" && req.method === "POST") return createClient(ctx, req);
+  if (p === "/clients/new" && req.method === "GET") return html(newClientPage({}, sidebarClients(await clientRows(ctx))));
+  if (p === "/help" && req.method === "GET") return html(helpPage(sidebarClients(await clientRows(ctx))));
   if ((m = p.match(/^\/clients\/([a-z0-9-]+)(\/.*)?$/))) {
     const client = await ctx.registry.get(m[1]!);
     if (!client) throw new HttpError(404, "No such client");
@@ -234,13 +239,8 @@ async function report(ctx: Context, req: Request, token: string, view?: string):
   if (![...status.values()].some((s) => s.products > 0)) return html(waitingPage(client.name));
 
   const base = `/r/${client.reportToken}`;
-  const nav = (current: "report" | "market") =>
-    `<nav style="max-width:1080px;margin:0 auto;padding:12px 16px 0;font:14px system-ui,sans-serif;display:flex;gap:16px;flex-wrap:wrap">` +
-    (merchant ? `<a href="${base}"${current === "report" ? ' style="font-weight:700"' : ""}>Weekly report</a>` : "") +
-    `<a href="${base}/market"${current === "market" ? ' style="font-weight:700"' : ""}>Market view</a>` +
-    (merchant ? `<a href="${base}/prices.csv">Price changes (CSV)</a>` : "") +
-    `</nav>`;
-  const withNav = (doc: string, current: "report" | "market") => doc.replace("<body>", `<body>${nav(current)}`);
+  const withNav = (doc: string, current: "report" | "market") =>
+    doc.replace("</head>", `${reportNav.css}</head>`).replace("<body>", `<body>${reportNav.html({ base, current, hasStore: Boolean(merchant), clientName: client.name })}`);
   const headers = { "x-robots-tag": "noindex", "referrer-policy": "no-referrer" };
 
   if (view === "prices.csv") {
@@ -260,22 +260,31 @@ async function report(ctx: Context, req: Request, token: string, view?: string):
 
 // ---------- admin ----------
 
-async function dashboard(ctx: Context, req: Request, flash: { notice: string | null; error: string | null }): Promise<Reply> {
+/** Every client with the counts the dashboard, sidebar and next-step hints need. */
+async function clientRows(ctx: Context): Promise<ClientRow[]> {
   const rows: ClientRow[] = [];
   for (const client of await ctx.registry.list()) {
     const repo = ctx.root.forClient(client.id);
     const stores = await repo.listStores();
     const status = await ctx.registry.storeStatus(stores.map((s) => s.id));
-    const checked = [...status.values()].map((s) => s.lastCheckedAt?.getTime() ?? 0);
+    const states = [...status.values()];
+    const checked = states.map((s) => s.lastCheckedAt?.getTime() ?? 0);
     rows.push({
       client,
       merchant: stores.find((s) => s.kind === "merchant"),
       competitors: stores.filter((s) => s.kind === "competitor").length,
       confirmedPairs: (await repo.listMatches("confirmed")).length,
+      suggestedPairs: (await repo.listMatches("suggested")).length,
+      checking: states.filter((s) => !s.lastCheckedAt && !s.lastError).length,
+      failing: states.filter((s) => s.lastError).length,
       lastCheckedAt: checked.length && Math.max(...checked) > 0 ? new Date(Math.max(...checked)) : undefined,
     });
   }
-  return html(dashboardPage(rows, req.baseUrl, flash));
+  return rows;
+}
+
+async function dashboard(ctx: Context, req: Request, flash: { notice: string | null; error: string | null }): Promise<Reply> {
+  return html(dashboardPage(await clientRows(ctx), req.baseUrl, flash));
 }
 
 function storeFromInput(raw: string, kind: Store["kind"], name?: string): Store {
@@ -292,23 +301,47 @@ async function startChecks(ctx: Context, req: Request, storeIds: string[]) {
 
 async function createClient(ctx: Context, req: Request): Promise<Reply> {
   const form = await req.form();
-  const name = (form.get("name") ?? "").trim();
-  if (!name) return redirect(`/?error=${encodeURIComponent("Give the business a name.")}`);
+  const competitorInputs = [...form.getAll("competitor"), ...(form.get("competitors") ?? "").split(/\r?\n/)].map((x) => x.trim()).filter(Boolean);
+  const values: WizardValues = {
+    name: (form.get("name") ?? "").trim(),
+    store: (form.get("store") ?? "").trim(),
+    competitors: competitorInputs,
+    strategy: form.get("strategy") ?? undefined,
+    minMarginPercent: form.get("minMarginPercent") ?? undefined,
+    autoConfirm: form.has("strategy") ? form.get("autoConfirm") === "1" : undefined,
+  };
+  // On a mistake, show the form again with what was typed, instead of losing it.
+  const again = async (error: string) => html(newClientPage(values, sidebarClients(await clientRows(ctx)), error), 400);
+  if (!values.name) return again("Give the business a name.");
   const stores: Store[] = [];
   try {
-    const own = (form.get("store") ?? "").trim();
-    if (own) stores.push(storeFromInput(own, "merchant"));
-    for (const line of (form.get("competitors") ?? "").split(/\r?\n/)) {
-      if (line.trim()) stores.push(storeFromInput(line, "competitor"));
-    }
+    if (values.store) stores.push(storeFromInput(values.store, "merchant"));
+    for (const line of competitorInputs) stores.push(storeFromInput(line, "competitor"));
   } catch (err) {
-    return redirect(`/?error=${encodeURIComponent((err as Error).message)}`);
+    return again(`${(err as Error).message}. Use the shop's web address, such as https://brand.com.`);
   }
-  const client = await ctx.registry.create(name);
+  // Two entries for the same shop would be read twice; keep the first.
+  const unique = stores.filter((s, i) => stores.findIndex((x) => x.id === s.id) === i);
+  const client = await ctx.registry.create(values.name);
+  if (form.has("strategy")) {
+    const strategy = values.strategy as PricingConfig["strategy"];
+    const margin = Number(values.minMarginPercent);
+    const settings: ClientSettings = {
+      pricing: {
+        ...(["beat", "match", "premium"].includes(strategy) ? { strategy } : {}),
+        ...(values.minMarginPercent && margin >= 0 && margin < 100 ? { minMarginPercent: margin } : {}),
+      },
+      ...(values.autoConfirm ? { autoConfirmAbove: AUTO_CONFIRM_AT } : {}),
+    };
+    await ctx.registry.update(client.id, { settings });
+  }
   const repo = ctx.root.forClient(client.id);
-  for (const s of stores) await repo.upsertStore(s);
-  await startChecks(ctx, req, stores.map((s) => s.id));
-  return redirect(`/clients/${client.id}?ok=${encodeURIComponent(`Added ${client.name}. The first check has started.`)}`);
+  for (const s of unique) await repo.upsertStore(s);
+  await startChecks(ctx, req, unique.map((s) => s.id));
+  const message = unique.length
+    ? `Added ${client.name}. Undercut is reading ${unique.length} store${unique.length === 1 ? "" : "s"} now; this page updates as it goes.`
+    : `Added ${client.name}. Add their stores below to start.`;
+  return redirect(`/clients/${client.id}?ok=${encodeURIComponent(message)}`);
 }
 
 async function clientRoutes(ctx: Context, req: Request, client: Client, sub: string, flash: { notice: string | null; error: string | null }): Promise<Reply> {
@@ -376,6 +409,10 @@ async function clientRoutes(ctx: Context, req: Request, client: Client, sub: str
           },
           alerts: { ...client.settings.alerts, webhookUrl: webhook || undefined },
         };
+        if (form.has("autoConfirmField")) {
+          if (form.get("autoConfirm") === "1") settings.autoConfirmAbove = client.settings.autoConfirmAbove ?? AUTO_CONFIRM_AT;
+          else delete settings.autoConfirmAbove;
+        }
         for (const [k, v] of Object.entries(settings.pricing!)) if (v === undefined || Number.isNaN(v)) delete (settings.pricing as Record<string, unknown>)[k];
         await ctx.registry.update(client.id, { name: form.get("name") ?? undefined, settings });
         return back("ok", "Settings saved.");
@@ -441,6 +478,7 @@ async function renderClient(ctx: Context, req: Request, client: Client, flash: {
       config: withClientSettings(DEFAULT_CONFIG, client.settings),
       shopifyEnabled: Boolean(ctx.env.SHOPIFY_API_KEY && ctx.env.SHOPIFY_API_SECRET),
       currency,
+      sidebar: sidebarClients(await clientRows(ctx)),
     },
     flash,
   );
