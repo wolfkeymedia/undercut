@@ -18,6 +18,10 @@ export class MemoryRepository implements Repository {
     return [...this.stores.values()].filter((s) => !kind || s.kind === kind);
   }
 
+  async removeStore(id: string) {
+    this.stores.delete(id);
+  }
+
   async saveObservation(observation: StoreObservation) {
     const list = this.observations.get(observation.storeId) ?? [];
     list.push(structuredClone(observation));
@@ -75,6 +79,14 @@ export class MemoryRepository implements Repository {
   }
   async trackedUrls(storeId: string) {
     return [...(this.tracked.get(storeId) ?? [])];
+  }
+
+  private cursors = new Map<string, number>();
+  async crawlCursor(storeId: string) {
+    return this.cursors.get(storeId) ?? 0;
+  }
+  async setCrawlCursor(storeId: string, cursor: number) {
+    this.cursors.set(storeId, cursor);
   }
 
   async close() {}

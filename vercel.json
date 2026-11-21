@@ -1,0 +1,20 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "npm ci --omit=optional",
+  "buildCommand": "npm run build",
+  "outputDirectory": "public",
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 300,
+      "includeFiles": "db/migrations/**"
+    }
+  },
+  "rewrites": [
+    { "source": "/((?!robots\\.txt$).*)", "destination": "/api/index?__path=$1" }
+  ],
+  "crons": [
+    { "path": "/api/cron/collect", "schedule": "0 4 * * *" },
+    { "path": "/api/cron/finish", "schedule": "0 6 * * *" }
+  ]
+}

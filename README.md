@@ -14,7 +14,7 @@ See it without setting anything up:
 npm install && npm run demo   # writes demo-report.html and demo-brief.md for a sample coffee store
 ```
 
-This repository holds the engine: collectors, change detection, product matching, storage and the brief writer, driven from a command line. The Shopify app and dashboard come next (see [Roadmap](#roadmap)).
+This repository holds the engine (collectors, change detection, product matching, storage and the brief writer), a command line, and a hosted web app for Vercel that runs it for any number of clients (see [Hosting on Vercel](#hosting-on-vercel)).
 
 ## How it works
 
@@ -98,6 +98,44 @@ Copy `undercut.config.example.json` to `undercut.config.json` to change the defa
 - `priceSensitivity` and `maxShareAtRisk`: the sales-at-risk estimate above.
 - `alerts.webhookUrl` (or `UNDERCUT_ALERT_WEBHOOK`): where urgent changes are posted. `alerts.minScore` sets how urgent.
 
+## Clients
+
+One install serves many clients. A client is a business you watch competitors for: their own store, the competitors they care about, their product pairs, pricing rules and alert webhook. Adding a client needs no code change: use the web app's Add client form, or the CLI:
+
+```sh
+npm run cli -- add-client "SOSU Cosmetics"                     # prints the id, e.g. sosu-cosmetics
+npm run cli -- add-store https://sosucosmetics.com --merchant --client sosu-cosmetics
+npm run cli -- add-store https://www.charlottetilbury.com/ie --client sosu-cosmetics
+npm run cli -- clients                                          # every client with its report link
+```
+
+Every CLI command takes `--client ID` (or `UNDERCUT_CLIENT`). Without it, commands work on the client `default`, which is where an install from before clients existed keeps its data after `migrate`. A competitor watched by several clients is collected once and shared; pairs, roles and settings stay per client.
+
+## Hosting on Vercel
+
+The web app (`src/web`) runs as one Vercel function (`api/index.js`, routed by `vercel.json`):
+
+- **Admin** at `/`, behind `ADMIN_PASSWORD`: add clients and stores, review and confirm product pairs, pair by hand, set pricing rules and alerts, paste a costs CSV, connect Shopify, start a check.
+- **Report links** at `/r/<token>`, one private link per client to share with them: the weekly report once their own store is added, the market view (`/r/<token>/market`) and recommended prices as CSV (`/r/<token>/prices.csv`). A link can be replaced from the client's page.
+- **Daily checks** by Vercel cron: `/api/cron/collect` at 04:00 UTC starts one function per store. A large store without a Shopify feed is read in slices of about four minutes, each slice carrying on in a new function from where the last stopped, and unread products keep their last state so nothing reads as removed. `/api/cron/finish` at 06:00 UTC refreshes pairs, syncs Shopify figures and sends each client's urgent alerts.
+- **Shopify (read-only)** at `/shopify/install` and `/shopify/callback`: the standard OAuth authorization-code grant with HMAC and state checks, asking only for `read_products`, `read_inventory` and `read_orders`. With the install, Undercut reads each product's unit cost and the last 28 days of unit sales, so reports put money figures on every move without a CSV. Tokens are stored encrypted (AES-256-GCM). `/shopify/webhooks` handles `app/uninstalled` and the privacy webhooks.
+
+Pages that need JavaScript to show prices can't be rendered on Vercel (no headless browser); run the CLI with Playwright on your own machine for those stores, against the same database.
+
+Environment variables (Project Settings, Environment Variables):
+
+| Name | |
+| --- | --- |
+| `DATABASE_URL` | Postgres connection string. Use a pooled one (Neon's pooled URL, or Supabase on port 6543). `POSTGRES_URL` from a Vercel storage integration works too. Tables are created on first request. |
+| `ADMIN_PASSWORD` | Password for the admin pages. |
+| `UNDERCUT_SECRET` | 32+ random characters. Signs sign-in cookies and encrypts Shopify tokens; changing it signs everyone out and disconnects Shopify installs. |
+| `CRON_SECRET` | Random string. Vercel sends it with cron calls; the app uses it for its own job calls. |
+| `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET` | Optional. Client ID and secret of a Shopify app from the Partner dashboard (or a custom app in a store's admin). Set the app's URL to `https://<your-domain>/shopify/install` and its allowed redirect URL to `https://<your-domain>/shopify/callback`. |
+| `ANTHROPIC_API_KEY` | Optional, for Claude-written briefs. |
+| `UNDERCUT_PUBLIC_URL` | Optional. The address to put in links, if not the one the request came in on. |
+
+Run it locally the same way: `npm run build && npm run web`, with the same variables set.
+
 ## Development
 
 ```sh
@@ -106,12 +144,12 @@ npm run typecheck
 TEST_DATABASE_URL=postgres://postgres:postgres@localhost:5432/undercut_test npm test   # also runs the Postgres tests
 ```
 
-The Postgres tests drop and recreate the `public` schema of the database you point them at, so use a throwaway database.
+The Postgres tests drop and recreate the `public` schema of the database you point them at, and create two more databases next to it (`undercut_web_test`, `undercut_tenancy_test`), so use a throwaway server.
 
 ## Roadmap
 
-1. **Shopify app**: install flow, catalog, cost and sales import through the Admin API (no CSVs), one-click apply for recommended prices, the report as the app's home page, Shopify Billing.
-2. **Scheduler and email**: a job queue that spreads checks over the day, and the weekly brief and report sent by email.
+1. **Shopify app listing**: embedded admin page, one-click apply for recommended prices (needs write access), Shopify Billing. The read-only install already works.
+2. **Email**: the weekly brief and report sent to each client by email.
 3. **Competitor discovery**: suggest competitors from the merchant's niche and keywords.
 4. **Better matching**: image and embedding similarity, learning from confirmations.
 5. **Headless browser fallback** for stores that render prices with JavaScript, with proxy rotation.

@@ -4,20 +4,23 @@ import { parseArgs } from "node:util";
 import { politeFetcher } from "./collectors/http.js";
 import { browserRenderer } from "./collectors/render.js";
 import { sendAlerts } from "./alerts.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, withClientSettings } from "./config.js";
 import { parseEconomicsCsv } from "./costs.js";
 import { recommendationsCsv } from "./insights/pricing.js";
 import { formatCents } from "./money.js";
 import { buildBrief, buildInsights, buildMarketView, checkStore, pairProducts, refreshMatches, storeIdFromUrl } from "./pipeline.js";
 import { renderReport } from "./report/html.js";
 import { renderMarketReport } from "./report/market.js";
-import { migrate, PostgresRepository } from "./store/postgres.js";
+import { ClientRegistry } from "./store/clients.js";
+import { DEFAULT_CLIENT, migrate, PostgresRepository } from "./store/postgres.js";
 import type { ProductMatch, Store } from "./types.js";
 
-const HELP = `Usage: undercut <command> [options]
+const HELP = `Usage: undercut <command> [options] [--client ID]
 
 Commands:
   migrate                          Create or update the database tables
+  clients                          List clients, with their report links
+  add-client <name>                Add a client (a business you watch competitors for)
   add-store <url> --merchant       Add your own store
   add-store <url> [NAME]           Add a competitor (or --name NAME)
   stores                           List stores
@@ -36,6 +39,7 @@ Commands:
   scorecard                        Show where each of your products stands against competitors
   prices [--out FILE]              Recommend price changes from your pricing rules (CSV with --out)
 
+Every other command works on one client: --client ID, or UNDERCUT_CLIENT, or "default".
 Settings: undercut.config.json (see undercut.config.example.json) for pricing rules, alert webhook and estimates.
 Environment: DATABASE_URL (required), ANTHROPIC_API_KEY (optional, for Claude-written briefs),
              UNDERCUT_ALERT_WEBHOOK (optional, Slack incoming webhook or any JSON endpoint)`;
@@ -49,6 +53,7 @@ async function main() {
       status: { type: "string" },
       days: { type: "string" },
       out: { type: "string" },
+      client: { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -60,8 +65,15 @@ async function main() {
 
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error("Set DATABASE_URL to a Postgres connection string (see .env.example).");
-  const repo = PostgresRepository.fromUrl(databaseUrl);
-  const config = await loadConfig();
+  const clientId = values.client ?? process.env.UNDERCUT_CLIENT ?? DEFAULT_CLIENT;
+  const repo = PostgresRepository.fromUrl(databaseUrl, clientId);
+  const clients = new ClientRegistry(repo.db);
+  const fileConfig = await loadConfig();
+  const client = command === "migrate" ? null : await clients.get(clientId).catch(() => null);
+  if (!client && clientId !== DEFAULT_CLIENT && command !== "migrate" && command !== "clients" && command !== "add-client") {
+    throw new Error(`No client "${clientId}". See them with: undercut clients`);
+  }
+  const config = withClientSettings(fileConfig, client?.settings);
   const days = Number(values.days ?? 7);
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
@@ -70,6 +82,26 @@ async function main() {
       case "migrate": {
         const applied = await migrate(repo.db);
         console.log(applied.length ? `Applied ${applied.join(", ")}` : "Database is up to date.");
+        break;
+      }
+
+      case "clients": {
+        const base = process.env.UNDERCUT_PUBLIC_URL?.replace(/\/+$/, "");
+        for (const c of await clients.list()) {
+          const stores = await repo.forClient(c.id).listStores();
+          console.log(
+            `${c.id.padEnd(24)} ${c.name.padEnd(28)} ${String(stores.length).padStart(3)} stores  ` +
+              (base ? `${base}/r/${c.reportToken}` : `report token ${c.reportToken}`),
+          );
+        }
+        break;
+      }
+
+      case "add-client": {
+        const name = args.join(" ").trim();
+        if (!name) throw new Error('Give the business name, e.g. undercut add-client "SOSU Cosmetics"');
+        const c = await clients.create(name);
+        console.log(`Added ${c.name}. Use --client ${c.id} with the other commands, starting with add-store <url> --merchant.`);
         break;
       }
 

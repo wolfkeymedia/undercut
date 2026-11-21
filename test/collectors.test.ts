@@ -220,3 +220,51 @@ describe("collectStore", () => {
     expect(obs.products[0]?.currency).toBe("EUR");
   });
 });
+
+describe("time-limited collection", () => {
+  it("reads a large store in slices and keeps unread products as they were", async () => {
+    const { MemoryRepository } = await import("../src/store/memory.js");
+    const { checkStore } = await import("../src/pipeline.js");
+    const base = "https://big.example";
+    const page = (n: number, price: string) =>
+      `<script type="application/ld+json">${JSON.stringify({ "@type": "Product", name: `Item ${n}`, sku: `s${n}`, offers: { price, priceCurrency: "EUR", availability: "https://schema.org/InStock" } })}</script>`;
+    const urls = [1, 2, 3, 4].map((n) => `${base}/products/item-${n}`);
+    let price = "10.00";
+    const routes: Record<string, string | (() => string)> = {
+      [`${base}/sitemap.xml`]: `<urlset>${urls.map((u) => `<url><loc>${u}</loc></url>`).join("")}</urlset>`,
+    };
+    urls.forEach((u, i) => (routes[u] = () => page(i + 1, price)));
+    const fetcher = fakeFetcher(routes);
+    let clock = 0;
+    const slowFetcher = (async (u: string) => {
+      if (u.includes("/products/")) clock++;
+      return fetcher(u);
+    }) as typeof fetcher;
+
+    const repo = new MemoryRepository();
+    const store = { id: "big", name: "Big", url: base, kind: "competitor" as const };
+    await repo.upsertStore(store);
+    await checkStore(repo, fetcher, store); // first full read
+    expect((await repo.currentProducts("big")).length).toBe(4);
+
+    // Prices change; this run only gets through two pages before its time is up.
+    price = "8.00";
+    const realNow = Date.now;
+    Date.now = () => (clock >= 2 ? 2e15 : realNow());
+    try {
+      const { complete, events } = await checkStore(repo, slowFetcher, store, { deadline: 1e15 });
+      expect(complete).toBe(false);
+      expect(events.filter((e) => e.kind === "price_drop")).toHaveLength(2);
+      expect(events.filter((e) => e.kind === "removed_product")).toHaveLength(0);
+      expect((await repo.currentProducts("big")).length).toBe(4);
+      expect(await repo.crawlCursor("big")).toBe(2);
+    } finally {
+      Date.now = realNow;
+    }
+    // The next run starts where that one stopped.
+    const { complete, events } = await checkStore(repo, fetcher, store, { deadline: Date.now() + 60_000 });
+    expect(complete).toBe(true);
+    expect(events.filter((e) => e.kind === "price_drop")).toHaveLength(2);
+    expect(await repo.crawlCursor("big")).toBe(0);
+  });
+});

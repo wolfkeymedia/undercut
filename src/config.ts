@@ -79,3 +79,17 @@ export async function loadConfig(path = process.env.UNDERCUT_CONFIG ?? "undercut
     },
   };
 }
+
+/** Layers one client's saved settings over a base config (the defaults, or the CLI's file). */
+export function withClientSettings(
+  base: Config,
+  settings: { pricing?: Partial<PricingConfig>; alerts?: Partial<Config["alerts"]>; priceSensitivity?: number; maxShareAtRisk?: number } = {},
+): Config {
+  return {
+    ...base,
+    priceSensitivity: settings.priceSensitivity ?? base.priceSensitivity,
+    maxShareAtRisk: settings.maxShareAtRisk ?? base.maxShareAtRisk,
+    pricing: { ...base.pricing, ...settings.pricing },
+    alerts: { ...base.alerts, ...settings.alerts, webhookUrl: settings.alerts?.webhookUrl || base.alerts.webhookUrl },
+  };
+}

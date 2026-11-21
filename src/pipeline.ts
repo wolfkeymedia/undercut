@@ -20,11 +20,22 @@ export async function checkStore(
   fetcher: Fetcher,
   store: Store,
   options?: CollectOptions,
-): Promise<{ observation: StoreObservation; events: ChangeEvent[] }> {
+): Promise<{ observation: StoreObservation; events: ChangeEvent[]; complete: boolean }> {
   const tracked = await repo.trackedUrls(store.id);
   const productUrls = [...new Set([...tracked, ...(options?.productUrls ?? [])])];
-  const observation = await collectStore(fetcher, store, { ...options, productUrls });
+  const sliced = options?.deadline !== undefined;
+  const startAt = sliced ? await repo.crawlCursor(store.id) : 0;
+  const observation = await collectStore(fetcher, store, { ...options, productUrls, startAt });
   const previous = await repo.latestObservation(store.id);
+  if (observation.partial && previous) {
+    // Pages this run didn't reach keep their last known state, so they don't read as removed.
+    const reached = new Set(observation.partial.attemptedUrls.map(normalUrl));
+    const have = new Set(observation.products.map((p) => p.externalId));
+    for (const p of previous.products) {
+      if (!have.has(p.externalId) && !reached.has(normalUrl(p.url))) observation.products.push(p);
+    }
+  }
+  if (sliced) await repo.setCrawlCursor(store.id, observation.partial?.nextCursor ?? 0);
   // An empty result usually means we were blocked, not that the store sells nothing.
   if (observation.products.length === 0 && previous && previous.products.length > 0) {
     throw new Error(`No products collected from ${store.url}; keeping the previous observation`);
@@ -32,7 +43,7 @@ export async function checkStore(
   const events = detectChanges(previous, observation);
   await repo.saveObservation(observation);
   await repo.saveEvents(events);
-  return { observation, events };
+  return { observation, events, complete: !observation.partial };
 }
 
 /** Re-suggests matches between the merchant's catalog and each competitor's latest products. */
@@ -171,14 +182,16 @@ export async function buildBrief(repo: Repository, since: Date, until = new Date
 
 /** Product URLs compare equal regardless of query string, fragment, trailing slash or "www.". */
 export function sameProductUrl(a: string, b: string): boolean {
-  const norm = (u: string) => {
+  const na = normalUrl(a);
+  return na !== "" && na === normalUrl(b);
+}
+
+function normalUrl(u: string): string {
+  try {
     const x = new URL(u);
     return `${x.host.replace(/^www\./, "")}${x.pathname.replace(/\/+$/, "")}`.toLowerCase();
-  };
-  try {
-    return norm(a) === norm(b);
   } catch {
-    return false;
+    return "";
   }
 }
 
