@@ -87,9 +87,16 @@ describe.skipIf(!baseUrl)("hosted app", () => {
     // Confirm the suggested pair, then the weekly report is the one shown.
     const key = page.match(/name="key" value="([^"]+)"/)![1]!.replace(/&quot;/g, '"');
     await post("/clients/glow-co/matches", { key, status: "confirmed" });
-    const report = await (await fetch(`${origin}${link}`)).text();
+    // The first page is the summary and move cards; the full report sits one click behind it.
+    const first = await (await fetch(`${origin}${link}`)).text();
+    expect(first).toContain("Doing well");
+    expect(first).toContain("Needs attention");
+    expect(first).toContain("Suggested moves");
+    expect(first).toContain(`href="${link}/details"`);
+    expect(first).toContain("Market view");
+    const report = await (await fetch(`${origin}${link}/details`)).text();
     expect(report).toContain("Undercut weekly report");
-    expect(report).toContain("Market view");
+    expect(report).toContain('id="prices"');
     expect((await fetch(`${origin}${link}/market`)).status).toBe(200);
     expect((await fetch(`${origin}/r/${"0".repeat(32)}`)).status).toBe(404);
   });

@@ -197,7 +197,7 @@ ${REPORT_CSS}</style>
     }
   </section>
 
-  <section>
+  <section id="prices">
     <h2>Prices to change this week</h2>
     ${
       actions

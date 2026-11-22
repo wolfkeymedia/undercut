@@ -8,6 +8,7 @@ import { recommendationsCsv } from "../insights/pricing.js";
 import { buildInsights, buildMarketView, pairProducts, refreshMatches, storeIdFromUrl } from "../pipeline.js";
 import { renderReport } from "../report/html.js";
 import { renderMarketReport } from "../report/market.js";
+import { renderSummary } from "../report/summary.js";
 import { authorizeUrl, exchangeCode, normaliseShop, verifyQueryHmac, verifyWebhookHmac } from "../shopify/oauth.js";
 import { adminGraphQL, shopInfo } from "../shopify/sync.js";
 import { ClientRegistry, type Client, type ClientSettings } from "../store/clients.js";
@@ -127,7 +128,7 @@ async function route(req: Request, rawEnv: AppEnv, overrides: Overrides): Promis
   let m: RegExpMatchArray | null;
 
   // Client report links: no account needed, the token in the link is the key.
-  if ((m = p.match(/^\/r\/([a-f0-9]+)(?:\/(market|prices\.csv))?$/))) return report(ctx, req, m[1]!, m[2]);
+  if ((m = p.match(/^\/r\/([a-f0-9]+)(?:\/(details|market|prices\.csv))?$/))) return report(ctx, req, m[1]!, m[2]);
 
   // Scheduled and internal jobs.
   if (p === "/api/cron/collect") return cronAuth(ctx, req) ?? collectAll(ctx, req);
@@ -239,7 +240,7 @@ async function report(ctx: Context, req: Request, token: string, view?: string):
   if (![...status.values()].some((s) => s.products > 0)) return html(waitingPage(client.name));
 
   const base = `/r/${client.reportToken}`;
-  const withNav = (doc: string, current: "report" | "market") =>
+  const withNav = (doc: string, current: "summary" | "details" | "market") =>
     doc.replace("</head>", `${reportNav.css}</head>`).replace("<body>", `<body>${reportNav.html({ base, current, hasStore: Boolean(merchant), clientName: client.name })}`);
   const headers = { "x-robots-tag": "noindex", "referrer-policy": "no-referrer" };
 
@@ -255,7 +256,10 @@ async function report(ctx: Context, req: Request, token: string, view?: string):
     return html(withNav(renderMarketReport(market, { since, title: merchant ? `${merchant.name} against the market` : `${client.name}: competitor market` }), "market"), 200, headers);
   }
   const insights = await buildInsights(repo, config, since);
-  return html(withNav(renderReport(insights, config, { weekOf: since }), "report"), 200, headers);
+  if (view === "details") return html(withNav(renderReport(insights, config, { weekOf: since }), "details"), 200, headers);
+  // The first page: what's going well, what isn't, and the moves to make. Everything else is one click away.
+  const query = req.query.get("days") ? `?days=${days}` : "";
+  return html(withNav(renderSummary(insights, { weekOf: since, detailsHref: `${base}/details${query}` }), "summary"), 200, headers);
 }
 
 // ---------- admin ----------

@@ -10,6 +10,7 @@ import { writeFile } from "node:fs/promises";
 import { DEFAULT_CONFIG } from "./config.js";
 import { buildBrief } from "./pipeline.js";
 import { renderReport } from "./report/html.js";
+import { renderSummary } from "./report/summary.js";
 import { MemoryRepository } from "./store/memory.js";
 import { suggestMatches } from "./match/matcher.js";
 import { detectChanges } from "./detect/changes.js";
@@ -139,6 +140,7 @@ if (process.argv[1]?.endsWith("demo.ts") || process.argv[1]?.endsWith("demo.js")
   const { repo, lastWeek } = await buildDemo();
   const { markdown, insights } = await buildBrief(repo, lastWeek, new Date(), DEFAULT_CONFIG);
   await writeFile("demo-report.html", renderReport(insights, DEFAULT_CONFIG, { weekOf: lastWeek, sample: true }));
+  await writeFile("demo-summary.html", renderSummary(insights, { weekOf: lastWeek, detailsHref: "demo-report.html", sample: true }));
   await writeFile("demo-brief.md", markdown + "\n");
-  console.log("Wrote demo-report.html and demo-brief.md for a sample coffee store.");
+  console.log("Wrote demo-summary.html (first page), demo-report.html (details) and demo-brief.md for a sample coffee store.");
 }
