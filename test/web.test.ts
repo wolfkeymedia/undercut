@@ -28,6 +28,16 @@ describe.skipIf(!baseUrl)("hosted app", () => {
   const fetcher = fakeFetcher({
     "https://mine.example/products.json?limit=250&page=1": shopifyFeed([{ id: 10, title: "Glow Serum 30ml", price: "30.00" }]),
     "https://them.example/products.json?limit=250&page=1": shopifyFeed([{ id: 1, title: "Glow Serum 30 ml", price: "27.00" }]),
+    "https://batch.example/products.json?limit=250&page=1": shopifyFeed([
+      { id: 21, title: "Velvet Lip Tint Rose", price: "18.00" },
+      { id: 22, title: "Velvet Lip Tint Coral", price: "18.00" },
+      { id: 23, title: "Silk Brow Gel Clear", price: "15.00" },
+    ]),
+    "https://rival.example/products.json?limit=250&page=1": shopifyFeed([
+      { id: 31, title: "Velvet Lip Tint Rose", price: "16.00" },
+      { id: 32, title: "Velvet Lip Tint Coral", price: "16.50" },
+      { id: 33, title: "Silk Brow Gel Clear", price: "14.00" },
+    ]),
   });
 
   beforeAll(async () => {
@@ -170,5 +180,44 @@ describe.skipIf(!baseUrl)("hosted app", () => {
     expect(page).toContain('<option value="match" selected>');
     expect(page.match(/them\.example<\/a>/g)).toHaveLength(1); // the duplicate was dropped
     expect(await (await get("/")).text()).toContain("Third Brand");
+  });
+
+  it("confirms and unpairs product pairs in batches", async () => {
+    await post("/clients", { name: "Batch Brand", store: "batch.example", competitors: "https://rival.example" });
+    await settle();
+    const keysOf = (html: string, formId: string) =>
+      [...html.matchAll(new RegExp(`name="key" value="([^"]+)" form="${formId}"`, "g"))].map((m) => m[1]!.replace(/&quot;/g, '"'));
+
+    const page = await (await get("/clients/batch-brand")).text();
+    expect(page).toContain("Confirm selected");
+    expect(page).toContain('data-select-all="pick-suggested"');
+    const suggested = keysOf(page, "pick-suggested");
+    expect(suggested).toHaveLength(3);
+
+    // Nothing ticked is a friendly error, not a silent no-op.
+    const none = await post("/clients/batch-brand/matches/batch", { status: "confirmed" });
+    expect(decodeURIComponent(none.headers.get("location")!)).toContain("Tick at least one pair first.");
+
+    const body = new URLSearchParams({ status: "confirmed" });
+    for (const k of suggested.slice(0, 2)) body.append("key", k);
+    body.append("key", suggested[0]!); // a repeated tick counts once
+    body.append("key", "not json");
+    const res = await fetch(`${origin}/clients/batch-brand/matches/batch`, { method: "POST", body, headers: { cookie: adminCookie }, redirect: "manual" });
+    expect(decodeURIComponent(res.headers.get("location")!)).toContain("Confirmed 2 pairs.");
+
+    const after = await (await get("/clients/batch-brand")).text();
+    expect(after).toContain("2 confirmed pairs");
+    expect(keysOf(after, "pick-suggested")).toEqual([suggested[2]]);
+    const confirmed = keysOf(after, "pick-confirmed");
+    expect(confirmed.sort()).toEqual(suggested.slice(0, 2).sort());
+
+    // A batch confirm is recorded like a single one, so single undo works on it.
+    await post("/clients/batch-brand/matches", { key: confirmed[0]!, status: "rejected" });
+    expect(await (await get("/clients/batch-brand")).text()).toContain("1 confirmed pair<");
+
+    // And a batch can be undone in one go.
+    const undo = await post("/clients/batch-brand/matches/batch", { key: confirmed[1]!, status: "rejected", undo: "1" });
+    expect(decodeURIComponent(undo.headers.get("location")!)).toContain("Unpaired 1 pair.");
+    expect(await (await get("/clients/batch-brand")).text()).toContain("No confirmed pairs yet");
   });
 });

@@ -151,6 +151,10 @@ html:not(.js) #next { display:none; }
 .choice b { font-size:14px; } .choice small { color:var(--muted); font-size:12.5px; }
 .check { display:flex; gap:10px; align-items:flex-start; font-weight:400; }
 .check input { width:auto; margin-top:3px; accent-color:var(--accent); }
+.pick { width:34px; padding-right:0; }
+.pick input { width:auto; margin:0; accent-color:var(--accent); cursor:pointer; }
+.batchbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:0 0 10px; }
+.batchbar span { margin-right:auto; }
 .comp-list { display:grid; gap:8px; }
 .comp-list .item { display:flex; gap:8px; }
 .review { display:grid; gap:10px; background:var(--soft); border-radius:12px; padding:16px; font-size:14px; }
@@ -174,6 +178,15 @@ document.addEventListener("click", function (e) {
   var b = e.target.closest("[data-copy]"); if (!b) return;
   e.preventDefault();
   navigator.clipboard.writeText(b.getAttribute("data-copy")).then(function () { var t = b.textContent; b.textContent = "Copied"; setTimeout(function () { b.textContent = t; }, 1600); });
+});
+document.addEventListener("change", function (e) {
+  var box = e.target; if (!box || box.type !== "checkbox") return;
+  var id = box.getAttribute("data-select-all") || box.getAttribute("form"); if (!id) return;
+  var boxes = document.querySelectorAll('input[name="key"][form="' + id + '"]');
+  if (box.hasAttribute("data-select-all")) boxes.forEach(function (b) { b.checked = box.checked; });
+  var n = 0; boxes.forEach(function (b) { if (b.checked) n++; });
+  var all = document.querySelector('[data-select-all="' + id + '"]'); if (all) { all.checked = n > 0 && n === boxes.length; all.indeterminate = n > 0 && n < boxes.length; }
+  var label = document.querySelector('[data-picked="' + id + '"]'); if (label) label.textContent = n ? n + " selected" : "Tick pairs to act on several at once.";
 });
 </script>`;
 
@@ -540,23 +553,31 @@ ${d.stores
 <label class="shrink" style="min-width:170px">Role<select name="role">${merchant ? "" : opt("merchant", "competitor", "Their own store")}${opt("competitor", "competitor", "Competitor")}</select></label>
 <div class="shrink"><button type="submit">Add store</button></div></form></section>`;
 
-  const pairRow = (m: ClientPageData["suggested"][number], actions: string) =>
-    `<tr><td><div class="prod">${m.mine ? `<a href="${esc(m.mine.url)}" rel="noreferrer" target="_blank">${esc(m.mine.title)}</a>` : esc(m.merchantExternalId)}<small>${money(m.mine)}</small></div></td>
+  const pairKey = (m: ProductMatch) => esc(JSON.stringify([m.merchantExternalId, m.competitorStoreId, m.competitorExternalId]));
+  const pick = (m: ProductMatch, formId: string) =>
+    `<td class="pick"><input type="checkbox" name="key" value="${pairKey(m)}" form="${formId}" aria-label="Select this pair"></td>`;
+  const pickAll = (formId: string) => `<th class="pick"><input type="checkbox" data-select-all="${formId}" aria-label="Select all"></th>`;
+  const batchBar = (formId: string, buttons: string) =>
+    `<form class="batchbar" id="${formId}" method="post" action="/clients/${id}/matches/batch"><span class="small muted" data-picked="${formId}">Tick pairs to act on several at once.</span>${buttons}</form>`;
+  const pairRow = (m: ClientPageData["suggested"][number], actions: string, formId: string) =>
+    `<tr>${pick(m, formId)}<td><div class="prod">${m.mine ? `<a href="${esc(m.mine.url)}" rel="noreferrer" target="_blank">${esc(m.mine.title)}</a>` : esc(m.merchantExternalId)}<small>${money(m.mine)}</small></div></td>
 <td><div class="prod">${m.theirs ? `<a href="${esc(m.theirs.url)}" rel="noreferrer" target="_blank">${esc(m.theirs.title)}</a>` : esc(m.competitorExternalId)}<small>${esc(m.storeName)} · ${money(m.theirs)}</small></div></td>
 <td class="num"><span class="pill conf ${m.confidence >= 0.9 ? "good" : m.confidence >= 0.75 ? "" : "warn"}">${Math.round(m.confidence * 100)}%</span></td><td class="num" style="white-space:nowrap">${actions}</td></tr>`;
   const matchForm = (m: ProductMatch, action: string, label: string, cls = "ghost small") =>
-    `<form class="inline" method="post" action="/clients/${id}/matches"><input type="hidden" name="key" value="${esc(JSON.stringify([m.merchantExternalId, m.competitorStoreId, m.competitorExternalId]))}"><input type="hidden" name="status" value="${action}"><button class="${cls}" type="submit">${label}</button></form>`;
+    `<form class="inline" method="post" action="/clients/${id}/matches"><input type="hidden" name="key" value="${pairKey(m)}"><input type="hidden" name="status" value="${action}"><button class="${cls}" type="submit">${label}</button></form>`;
   const strong = d.suggested.filter((m) => m.confidence >= 0.9).length;
 
   const suggested = d.suggested.length
-    ? `<div class="wrap"><table><thead><tr><th>Their product</th><th>Rival product</th><th class="num">Match</th><th></th></tr></thead><tbody>
-${d.suggested.map((m) => pairRow(m, `${matchForm(m, "confirmed", "✓ Confirm", "small")} ${matchForm(m, "rejected", "Not a match", "quiet small")}`)).join("")}</tbody></table></div>
+    ? `${batchBar("pick-suggested", '<button class="small" type="submit" name="status" value="confirmed">✓ Confirm selected</button><button class="quiet small" type="submit" name="status" value="rejected">Not a match (selected)</button>')}
+<div class="wrap"><table><thead><tr>${pickAll("pick-suggested")}<th>Their product</th><th>Rival product</th><th class="num">Match</th><th></th></tr></thead><tbody>
+${d.suggested.map((m) => pairRow(m, `${matchForm(m, "confirmed", "✓ Confirm", "small")} ${matchForm(m, "rejected", "Not a match", "quiet small")}`, "pick-suggested")).join("")}</tbody></table></div>
 ${d.suggestedTotal > d.suggested.length ? `<p class="small muted" style="margin-top:10px">Showing the ${d.suggested.length} closest of ${d.suggestedTotal} suggestions.</p>` : ""}`
     : `<div class="empty">${merchant ? (checking.length ? "Suggestions appear once the first check finishes." : "No suggestions waiting. New ones appear after each check when products look alike.") : "Add their own store first; pairs link their products to rival products."}</div>`;
 
   const confirmed = d.confirmed.length
-    ? `<details><summary>${d.confirmed.length} confirmed pair${d.confirmed.length === 1 ? "" : "s"}</summary><div class="wrap" style="margin-top:10px"><table><tbody>
-${d.confirmed.map((m) => pairRow(m, matchForm(m, "rejected", "Unpair", "quiet small"))).join("")}</tbody></table></div></details>`
+    ? `<details><summary>${d.confirmed.length} confirmed pair${d.confirmed.length === 1 ? "" : "s"}</summary><div style="margin-top:10px">${batchBar("pick-confirmed", '<input type="hidden" name="undo" value="1"><button class="quiet small" type="submit" name="status" value="rejected">Unpair selected</button>')}</div>
+<div class="wrap"><table><thead><tr>${pickAll("pick-confirmed")}<th>Their product</th><th>Rival product</th><th class="num">Match</th><th></th></tr></thead><tbody>
+${d.confirmed.map((m) => pairRow(m, matchForm(m, "rejected", "Unpair", "quiet small"), "pick-confirmed")).join("")}</tbody></table></div></details>`
     : '<p class="muted small" style="margin:0">No confirmed pairs yet. Until there are, the report shows the competitor market view.</p>';
 
   const pairsSection = `<section class="card anchor" id="pairs"><header><div><h2>Product pairs</h2><p>Which of their products competes with which rival product. Price advice is given only for paired products.</p></div>

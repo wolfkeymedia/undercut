@@ -373,11 +373,21 @@ async function clientRoutes(ctx: Context, req: Request, client: Client, sub: str
         return back("ok", `Checking ${stores.length} stores. Large stores take a few minutes; refresh this page to see progress.`);
       }
       case sub === "/matches": {
-        const [merchantExternalId, competitorStoreId, competitorExternalId] = JSON.parse(form.get("key") ?? "[]") as string[];
-        const status = form.get("status") as ProductMatch["status"];
-        if (!merchantExternalId || !competitorStoreId || !competitorExternalId || !["confirmed", "rejected"].includes(status)) throw new Error("That pair wasn't recognised.");
-        await repo.setMatchStatus({ merchantExternalId, competitorStoreId, competitorExternalId }, status);
+        const [key] = pairKeys([form.get("key") ?? ""]);
+        const status = decision(form.get("status"));
+        if (!key || !status) throw new Error("That pair wasn't recognised.");
+        await repo.setMatchStatus(key, status);
         return back("ok", status === "confirmed" ? "Pair confirmed." : "Pair rejected.");
+      }
+      case sub === "/matches/batch": {
+        const status = decision(form.get("status"));
+        if (!status) throw new Error("That choice wasn't recognised.");
+        const keys = pairKeys(form.getAll("key"));
+        if (keys.length === 0) throw new Error("Tick at least one pair first.");
+        // Each pair goes through the same call as a single confirm, so a batch is recorded the same way.
+        for (const key of keys) await repo.setMatchStatus(key, status);
+        const n = `${keys.length} pair${keys.length === 1 ? "" : "s"}`;
+        return back("ok", status === "confirmed" ? `Confirmed ${n}. Unpair any of them under confirmed pairs.` : form.get("undo") ? `Unpaired ${n}.` : `Marked ${n} as not a match.`);
       }
       case sub === "/confirm-above": {
         const min = Number(form.get("min"));
@@ -450,6 +460,31 @@ async function clientRoutes(ctx: Context, req: Request, client: Client, sub: str
   }
   throw new HttpError(404, "Not found");
 }
+
+type PairKey = Pick<ProductMatch, "merchantExternalId" | "competitorStoreId" | "competitorExternalId">;
+
+/** Reads pair keys as the pairs table posts them (a JSON triple each), dropping any that don't parse. */
+export function pairKeys(values: string[]): PairKey[] {
+  const seen = new Set<string>();
+  const keys: PairKey[] = [];
+  for (const v of values) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(v);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(parsed) || parsed.length !== 3 || !parsed.every((x) => typeof x === "string" && x)) continue;
+    const id = JSON.stringify(parsed);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const [merchantExternalId, competitorStoreId, competitorExternalId] = parsed as string[];
+    keys.push({ merchantExternalId: merchantExternalId!, competitorStoreId: competitorStoreId!, competitorExternalId: competitorExternalId! });
+  }
+  return keys;
+}
+
+const decision = (v: string | null): "confirmed" | "rejected" | undefined => (v === "confirmed" || v === "rejected" ? v : undefined);
 
 async function renderClient(ctx: Context, req: Request, client: Client, flash: { notice: string | null; error: string | null }): Promise<string> {
   const repo = ctx.root.forClient(client.id);
