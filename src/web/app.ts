@@ -9,6 +9,9 @@ import { buildInsights, buildMarketView, pairProducts, refreshMatches, storeIdFr
 import { renderReport } from "../report/html.js";
 import { renderMarketReport } from "../report/market.js";
 import { renderSummary } from "../report/summary.js";
+import { healthTeaser, renderHealth } from "../report/health.js";
+import { checkSiteHealth, type HealthOptions } from "../health/check.js";
+import { SiteHealthStore } from "../store/health.js";
 import { authorizeUrl, exchangeCode, normaliseShop, verifyQueryHmac, verifyWebhookHmac } from "../shopify/oauth.js";
 import { adminGraphQL, shopInfo } from "../shopify/sync.js";
 import { ClientRegistry, type Client, type ClientSettings } from "../store/clients.js";
@@ -35,6 +38,8 @@ export interface AppEnv {
   SHOPIFY_API_KEY?: string;
   SHOPIFY_API_SECRET?: string;
   UNDERCUT_PUBLIC_URL?: string;
+  /** Google PageSpeed Insights API key, for the speed part of site health. Optional. */
+  PAGESPEED_API_KEY?: string;
 }
 
 /** How long one invocation spends reading product pages, under the 300 s function limit. */
@@ -58,9 +63,12 @@ interface Context {
   dispatch: (baseUrl: string, path: string) => Promise<void>;
   /** Reads store pages; tests pass a fake one. */
   fetcher?: Fetcher;
+  health: SiteHealthStore;
+  /** Network for the site health check; tests pass fakes. */
+  healthOptions?: Pick<HealthOptions, "http" | "certExpiry">;
 }
 
-type Overrides = Partial<Pick<Context, "background" | "dispatch" | "fetcher">>;
+type Overrides = Partial<Pick<Context, "background" | "dispatch" | "fetcher" | "healthOptions">>;
 
 let shared: { url: string; root: PostgresRepository; ready: Promise<unknown> } | null = null;
 
@@ -122,18 +130,21 @@ async function route(req: Request, rawEnv: AppEnv, overrides: Overrides): Promis
         if (!res.ok && res.status !== 202) throw new Error(`${path} returned HTTP ${res.status}`);
       }),
     fetcher: overrides.fetcher,
+    health: new SiteHealthStore(db.root.db),
+    healthOptions: overrides.healthOptions,
   };
 
   const p = req.path;
   let m: RegExpMatchArray | null;
 
   // Client report links: no account needed, the token in the link is the key.
-  if ((m = p.match(/^\/r\/([a-f0-9]+)(?:\/(details|market|prices\.csv))?$/))) return report(ctx, req, m[1]!, m[2]);
+  if ((m = p.match(/^\/r\/([a-f0-9]+)(?:\/(details|market|health|prices\.csv))?$/))) return report(ctx, req, m[1]!, m[2]);
 
   // Scheduled and internal jobs.
   if (p === "/api/cron/collect") return cronAuth(ctx, req) ?? collectAll(ctx, req);
-  if (p === "/api/cron/finish") return cronAuth(ctx, req) ?? finishAll(ctx);
+  if (p === "/api/cron/finish") return cronAuth(ctx, req) ?? finishAll(ctx, req);
   if (p === "/api/check") return cronAuth(ctx, req) ?? checkJob(ctx, req);
+  if (p === "/api/health") return cronAuth(ctx, req) ?? healthJob(ctx, req);
 
   // Shopify.
   if (p === "/shopify/install") return shopifyInstall(ctx, req);
@@ -215,14 +226,60 @@ async function checkJob(ctx: Context, req: Request): Promise<Reply> {
   return json({ accepted: storeId, round }, 202);
 }
 
-async function finishAll(ctx: Context): Promise<Reply> {
+async function finishAll(ctx: Context, req: Request): Promise<Reply> {
   const since = new Date(Date.now() - DAY);
   const results = [];
   for (const client of (await ctx.registry.list()).filter((c) => c.active)) {
     results.push(await finishClient(ctx.root, ctx.registry, ctx.secrets, client, since));
+    // Site health runs weekly, each client in its own invocation.
+    const last = await ctx.health.lastStarted(client.id);
+    if (!last || Date.now() - last.getTime() > HEALTH_EVERY_MS) {
+      await ctx.dispatch(req.baseUrl, `/api/health?client=${encodeURIComponent(client.id)}`).catch((err) => console.error(err));
+    }
   }
   console.log(JSON.stringify({ job: "finish", results }));
   return json({ clients: results });
+}
+
+const HEALTH_EVERY_MS = 6 * DAY;
+/** Time the site health check may spend, under the 300 s function limit. */
+const HEALTH_BUDGET_MS = 200_000;
+
+async function healthJob(ctx: Context, req: Request): Promise<Reply> {
+  const client = await ctx.registry.get(req.query.get("client") ?? "");
+  if (!client) return json({ error: "No such client" }, 404);
+  const started = await startHealthCheck(ctx, client);
+  return json({ accepted: client.id, started }, 202);
+}
+
+/** Starts a site health check in the background unless one is running. Returns false when there's nothing to start. */
+async function startHealthCheck(ctx: Context, client: Client): Promise<boolean> {
+  const repo = ctx.root.forClient(client.id);
+  const [merchant] = await repo.listStores("merchant");
+  if (!merchant) return false;
+  const id = await ctx.health.start(client.id, merchant.url);
+  if (id === null) return false;
+  ctx.background(
+    (async () => {
+      try {
+        // The best-selling product page is the one worth timing; else the first one listed.
+        const products = (await repo.currentProducts(merchant.id)).filter((p) => p.url);
+        products.sort((a, b) => (b.unitsPerWeek ?? 0) - (a.unitsPerWeek ?? 0));
+        const data = await checkSiteHealth(merchant.url, {
+          ...ctx.healthOptions,
+          pageSpeedKey: ctx.env.PAGESPEED_API_KEY || undefined,
+          productUrls: products.slice(0, 3).map((p) => p.url),
+          deadline: Date.now() + HEALTH_BUDGET_MS,
+        });
+        await ctx.health.finish(id, data);
+        console.log(JSON.stringify({ job: "health", client: client.id, pages: data.pages.length }));
+      } catch (err) {
+        await ctx.health.finish(id, null, (err as Error).message);
+        throw err;
+      }
+    })(),
+  );
+  return true;
 }
 
 // ---------- reports ----------
@@ -240,7 +297,7 @@ async function report(ctx: Context, req: Request, token: string, view?: string):
   if (![...status.values()].some((s) => s.products > 0)) return html(waitingPage(client.name));
 
   const base = `/r/${client.reportToken}`;
-  const withNav = (doc: string, current: "summary" | "details" | "market") =>
+  const withNav = (doc: string, current: "summary" | "details" | "market" | "health") =>
     doc.replace("</head>", `${reportNav.css}</head>`).replace("<body>", `<body>${reportNav.html({ base, current, hasStore: Boolean(merchant), clientName: client.name })}`);
   const headers = { "x-robots-tag": "noindex", "referrer-policy": "no-referrer" };
 
@@ -251,6 +308,11 @@ async function report(ctx: Context, req: Request, token: string, view?: string):
       "content-disposition": `attachment; filename="${client.id}-price-changes.csv"`,
     });
   }
+  if (view === "health" && merchant) {
+    let health = await ctx.health.latest(client.id);
+    if (!health.data && !health.running && (await startHealthCheck(ctx, client))) health = { ...health, running: true };
+    return html(withNav(renderHealth({ clientName: client.name, data: health.data, running: health.running }), "health"), 200, headers);
+  }
   if (view === "market" || !merchant) {
     const market = await buildMarketView(repo, since);
     return html(withNav(renderMarketReport(market, { since, title: merchant ? `${merchant.name} against the market` : `${client.name}: competitor market` }), "market"), 200, headers);
@@ -259,7 +321,13 @@ async function report(ctx: Context, req: Request, token: string, view?: string):
   if (view === "details") return html(withNav(renderReport(insights, config, { weekOf: since }), "details"), 200, headers);
   // The first page: what's going well, what isn't, and the moves to make. Everything else is one click away.
   const query = req.query.get("days") ? `?days=${days}` : "";
-  return html(withNav(renderSummary(insights, { weekOf: since, detailsHref: `${base}/details${query}` }), "summary"), 200, headers);
+  const health = await ctx.health.latest(client.id);
+  if (!health.data && !health.running && !(await ctx.health.lastStarted(client.id))) await startHealthCheck(ctx, client);
+  return html(
+    withNav(renderSummary(insights, { weekOf: since, detailsHref: `${base}/details${query}`, healthHtml: healthTeaser(health.data, `${base}/health`) }), "summary"),
+    200,
+    headers,
+  );
 }
 
 // ---------- admin ----------

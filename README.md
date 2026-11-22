@@ -131,6 +131,7 @@ Environment variables (Project Settings, Environment Variables):
 | `UNDERCUT_SECRET` | 32+ random characters. Signs sign-in cookies and encrypts Shopify tokens; changing it signs everyone out and disconnects Shopify installs. |
 | `CRON_SECRET` | Random string. Vercel sends it with cron calls; the app uses it for its own job calls. |
 | `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET` | Optional. Client ID and secret of a Shopify app from the Partner dashboard (or a custom app in a store's admin). Set the app's URL to `https://<your-domain>/shopify/install` and its allowed redirect URL to `https://<your-domain>/shopify/callback`. |
+| `PAGESPEED_API_KEY` | Optional. A Google PageSpeed Insights API key (Google Cloud console, enable "PageSpeed Insights API", create an API key). Without it, the speed part of each client's Site health page shows as not connected. |
 | `ANTHROPIC_API_KEY` | Optional, for Claude-written briefs. |
 | `UNDERCUT_PUBLIC_URL` | Optional. The address to put in links, if not the one the request came in on. |
 

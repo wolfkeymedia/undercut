@@ -40,6 +40,17 @@ describe.skipIf(!baseUrl)("hosted app", () => {
     ]),
   });
 
+  // The client's own site, as the site health check sees it.
+  const healthOptions = {
+    http: async (url: string) =>
+      url === "https://mine.example/"
+        ? { status: 200, body: `<html><head><title>Mine</title></head><body><nav><a href="/gone">Gone</a></nav><img src="a.jpg"></body></html>`, contentType: "text/html" }
+        : url === "http://mine.example/"
+          ? { status: 301, location: "https://mine.example/", body: "", contentType: "text/html" }
+          : { status: 404, body: "", contentType: "text/html" },
+    certExpiry: async () => new Date(Date.now() + 90 * 86_400_000),
+  };
+
   beforeAll(async () => {
     const admin = new pg.Pool({ connectionString: baseUrl });
     await admin.query("DROP DATABASE IF EXISTS undercut_web_test WITH (FORCE)");
@@ -48,7 +59,7 @@ describe.skipIf(!baseUrl)("hosted app", () => {
     const u = new URL(baseUrl!);
     u.pathname = "/undercut_web_test";
     env.DATABASE_URL = u.toString();
-    server = createServer(createApp(env, { background: (p) => void pending.push(p), fetcher }));
+    server = createServer(createApp(env, { background: (p) => void pending.push(p), fetcher, healthOptions }));
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   });
@@ -94,6 +105,15 @@ describe.skipIf(!baseUrl)("hosted app", () => {
     expect(first).toContain("Suggested moves");
     expect(first).toContain(`href="${link}/details"`);
     expect(first).toContain("Market view");
+    // The first visit starts a site health check; the front page links to it.
+    expect(first).toContain(`href="${link}/health"`);
+    await settle();
+    const health = await (await fetch(`${origin}${link}/health`)).text();
+    expect(health).toContain("Site health: mine.example");
+    expect(health).toContain("Things to fix");
+    expect(health).toMatch(/\d links? in your menu or on key pages/);
+    expect(health).toContain("Not connected");
+    expect(await (await fetch(`${origin}${link}`)).text()).toMatch(/Site health \d+\/100/);
     const report = await (await fetch(`${origin}${link}/details`)).text();
     expect(report).toContain("Undercut weekly report");
     expect(report).toContain('id="prices"');
