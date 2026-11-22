@@ -35,7 +35,7 @@ describe.skipIf(!baseUrl)("multi-client storage", () => {
     await pool.query(`INSERT INTO stores (id, name, url, kind) VALUES ('mine', 'Mine', 'https://mine.example', 'merchant'), ('them', 'Them', 'https://them.example', 'competitor')`);
     await pool.query(`INSERT INTO product_matches VALUES ('1', 'them', '9', 0.9, 'confirmed', now())`);
 
-    expect(await migrate(pool)).toEqual(["004_clients.sql"]);
+    expect(await migrate(pool)).toEqual(["004_clients.sql", "005_site_health.sql"]);
     const repo = new PostgresRepository(pool, "default", false);
     expect((await repo.listStores()).map((s) => [s.id, s.kind])).toEqual([["mine", "merchant"], ["them", "competitor"]]);
     expect(await repo.listMatches("confirmed")).toHaveLength(1);

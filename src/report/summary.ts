@@ -16,7 +16,7 @@ const KIND: Record<SuggestedMove["kind"], { label: string; tone: string }> = {
  * and what isn't, then one card per suggested move with its likely impact.
  * Everything else lives on the details page that `detailsHref` points to.
  */
-export function renderSummary(insights: Insights, options: { weekOf: Date; detailsHref: string; generatedAt?: Date; sample?: boolean }): string {
+export function renderSummary(insights: Insights, options: { weekOf: Date; detailsHref: string; generatedAt?: Date; sample?: boolean; /** The site health line, already rendered. */ healthHtml?: string }): string {
   const s = buildSummary(insights, { now: options.generatedAt });
   const week = options.weekOf.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
   const details = (anchor?: string) => `${esc(options.detailsHref)}${anchor ? `#${anchor}` : ""}`;
@@ -59,6 +59,8 @@ ${REPORT_CSS}${SUMMARY_CSS}</style>
     <section class="attn"><h2>Needs attention</h2><ul>${items(s.needsAttention)}</ul></section>
   </div>
 
+  ${options.healthHtml ?? ""}
+
   <div>
     <h2 class="moves-h">Suggested moves</h2>
     ${cards ? `<div class="moves">${cards}</div>` : `<section><p class="empty">No moves to make this week. Your prices sit where your rules want them.</p></section>`}
@@ -72,7 +74,7 @@ ${REPORT_CSS}${SUMMARY_CSS}</style>
 `;
 }
 
-const SUMMARY_CSS = `
+export const SUMMARY_CSS = `
 .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
 .summary ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
 .summary li { padding-left: 26px; position: relative; }
@@ -92,4 +94,7 @@ const SUMMARY_CSS = `
 .move .note { font-size: 0.82rem; color: var(--accent); margin-top: 2px; }
 .move .more { font-size: 0.88rem; font-weight: 500; }
 .pill.accent { background: var(--accent-bg); color: var(--accent); }
+.health-teaser { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 18px; color: var(--fg); text-decoration: none; box-shadow: 0 1px 2px rgba(30,34,51,.04), 0 6px 24px rgba(30,34,51,.05); }
+.health-teaser:hover { border-color: var(--accent); }
+.health-teaser .go { margin-left: auto; color: var(--accent); font-weight: 500; font-size: 0.9rem; }
 `;
