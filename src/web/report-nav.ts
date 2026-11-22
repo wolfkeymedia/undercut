@@ -1,6 +1,6 @@
 import { esc } from "./http.js";
 
-/** The bar across the top of a client's report pages: brand, the two views and the CSV download. */
+/** The bar across the top of a client's report pages: brand, the report views and the CSV download. */
 export const reportNav = {
   css: `<style>
 .uc-nav { background: var(--surface); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
@@ -14,10 +14,10 @@ export const reportNav = {
 .uc-nav nav a.on { background: var(--accent-bg); color: var(--accent); }
 @media print { .uc-nav { display: none; } }
 </style>`,
-  html({ base, current, hasStore, clientName }: { base: string; current: "report" | "market"; hasStore: boolean; clientName: string }): string {
+  html({ base, current, hasStore, clientName }: { base: string; current: "summary" | "details" | "market"; hasStore: boolean; clientName: string }): string {
     const link = (href: string, label: string, on: boolean) => `<a href="${href}"${on ? ' class="on"' : ""}>${label}</a>`;
     return `<div class="uc-nav"><div class="in"><span class="logo"><i>◆</i>Undercut <span>· ${esc(clientName)}</span></span><nav>${
-      (hasStore ? link(base, "Weekly report", current === "report") : "") +
+      (hasStore ? link(base, "This week", current === "summary") + link(`${base}/details`, "Full details", current === "details") : "") +
       link(`${base}/market`, "Market view", current === "market") +
       (hasStore ? link(`${base}/prices.csv`, "Price changes (CSV)", false) : "")
     }</nav></div></div>`;
